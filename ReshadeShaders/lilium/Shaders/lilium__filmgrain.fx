@@ -5,7 +5,7 @@
 
 uniform float INTENSITY
 <
-  ui_label = "grain INTENSITY";
+  ui_label = "grain intensity";
   ui_type  = "drag";
   ui_min   = 0.f;
   ui_max   = 0.1f;
@@ -38,8 +38,8 @@ float Rand(inout float State)
 #define b1 asfloat(0xBF42BF5D) // -0.7607324991323768
 
 void PS_Filmgrain(
-      float4 Vpos     : SV_Position,
-      float2 TexCoord : TEXCOORD0,
+  in  float4 Vpos     : SV_Position,
+  in  float2 TexCoord : TEXCOORD0,
   out float4 Output   : SV_Target0)
 {
   float3 input = tex2D(ReShade::BackBuffer, TexCoord).rgb;
@@ -56,19 +56,19 @@ void PS_Filmgrain(
 
 #if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
 
-  float3 ycbcr = Csp::Ycbcr::FromRgb::Bt2020(Csp::Trc::ToPq(Csp::Mat::Bt709To::Bt2020(input / 125.f)));
+  float3 ycbcr = Csp::Ycbcr::RgbTo::YcbcrBt2020(Csp::Trc::LinearTo::Pq(Csp::Mat::Bt709To::Bt2020(input / 125.f)));
 
 #elif defined(IS_HDR10_LIKE_CSP)
 
-  float3 ycbcr = Csp::Ycbcr::FromRgb::Bt2020(input);
+  float3 ycbcr = Csp::Ycbcr::RgbTo::YcbcrBt2020(input);
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
 
-  float3 ycbcr = Csp::Ycbcr::FromRgb::Bt2020(Csp::Trc::ToPq(input / 100.f));
+  float3 ycbcr = Csp::Ycbcr::RgbTo::YcbcrBt2020(Csp::Trc::LinearTo::Pq(input / 100.f));
 
 #else //ACTUAL_COLOUR_SPACE == CSP_SRGB
 
-  float3 ycbcr = Csp::Ycbcr::FromRgb::Bt709(input);
+  float3 ycbcr = Csp::Ycbcr::RgbTo::YcbcrBt709(input);
 
 #endif //ACTUAL_COLOUR_SPACE ==
 
@@ -84,19 +84,19 @@ void PS_Filmgrain(
 
 #if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
 
-  float3 rgb = Csp::Mat::Bt2020To::Bt709(Csp::Trc::FromPq(Csp::Ycbcr::ToRgb::Bt2020(ycbcr))) * 125.f;
+  float3 rgb = Csp::Mat::Bt2020To::Bt709(Csp::Trc::PqTo::Linear(Csp::Ycbcr::YcbcrTo::RgbBt2020(ycbcr))) * 125.f;
 
 #elif defined(IS_HDR10_LIKE_CSP)
 
-  float3 rgb = Csp::Ycbcr::ToRgb::Bt2020(ycbcr);
+  float3 rgb = Csp::Ycbcr::YcbcrTo::RgbBt2020(ycbcr);
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
 
-  float3 rgb = Csp::Trc::FromPq(Csp::Ycbcr::ToRgb::Bt2020(ycbcr)) * 100.f;
+  float3 rgb = Csp::Trc::PqTo::Linear(Csp::Ycbcr::YcbcrTo::RgbBt2020(ycbcr)) * 100.f;
 
 #else //ACTUAL_COLOUR_SPACE == CSP_SRGB
 
-  float3 rgb = Csp::Ycbcr::ToRgb::Bt709(ycbcr);
+  float3 rgb = Csp::Ycbcr::YcbcrTo::RgbBt709(ycbcr);
 
 #endif //ACTUAL_COLOUR_SPACE ==
 
