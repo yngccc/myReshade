@@ -3,9 +3,8 @@
 #include "colour_space.fxh"
 
 
-#if (((__RENDERER__ >= 0xB000 && __RENDERER__ < 0x10000) \
-   || __RENDERER__ >= 0x20000)                           \
-  && defined(IS_POSSIBLE_HDR_CSP))
+#if (defined(IS_HDR_COMPATIBLE_API) \
+  && defined(IS_HDR_CSP))
 
 
 //float3 gamut(
@@ -157,16 +156,6 @@ namespace Itmos
 
     return hdr;
   } //Bt2446a
-
-
-  // outputs normalised values
-  float3 MapSdrIntoHdr(
-    float3 Input,
-    float  Brightness)
-  {
-    //map SDR into HDR
-    return Input * (Brightness / 10000.f);
-  } //MapSdrIntoHdr
 
 
   // HDR reference white in XYZ
@@ -673,10 +662,10 @@ namespace Itmos
 
         float min_I = min(min((I1 / I2), (I2 / I1)) * 1.1f, 1.f);
 
-        //to L'M'S'
-        LMS = Csp::Ictcp::Mat::IctcpTo::PqLms(float3(I2, min_I * Ct1, min_I * Cp1));
         //to LMS
-        LMS = Csp::Trc::PqTo::Linear(LMS);
+        LMS = Csp::Ictcp::IctcpTo::Lms(float3(I2,
+                                              min_I * Ct1,
+                                              min_I * Cp1));
         //to RGB
         return max(mul(LmsToRgb, LMS), 0.f);
       }

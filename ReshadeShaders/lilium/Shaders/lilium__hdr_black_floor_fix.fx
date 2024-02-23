@@ -1,26 +1,25 @@
 #include "lilium__include/hdr_black_floor_fix.fxh"
 
 
-#if (((__RENDERER__ >= 0xB000 && __RENDERER__ < 0x10000) \
-   || __RENDERER__ >= 0x20000)                           \
-  && defined(IS_POSSIBLE_HDR_CSP))
+#if (defined(IS_HDR_COMPATIBLE_API) \
+  && defined(IS_HDR_CSP))
 
 
 // Vertex shader generating a triangle covering the entire screen.
 // Calculate values only "once" (3 times because it's 3 vertices)
 // for the pixel shader.
 void VS_PrepareHdrBlackFloorFix(
-  in                  uint   Id           : SV_VertexID,
-  out                 float4 VPos         : SV_Position,
-  out                 float2 TexCoord     : TEXCOORD0,
-  out nointerpolation float4 FuncParms0   : FuncParms0,
-  out nointerpolation float  FuncParms1   : FuncParms1)
+  in                  uint   Id         : SV_VertexID,
+  out                 float4 VPos       : SV_Position,
+  out nointerpolation float4 FuncParms0 : FuncParms0,
+  out nointerpolation float  FuncParms1 : FuncParms1)
 {
-  TexCoord.x = (Id == 2) ? 2.f
+  float2 texCoord;
+  texCoord.x = (Id == 2) ? 2.f
                          : 0.f;
-  TexCoord.y = (Id == 1) ? 2.f
+  texCoord.y = (Id == 1) ? 2.f
                          : 0.f;
-  VPos = float4(TexCoord * float2(2.f, -2.f) + float2(-1.f, 1.f), 0.f, 1.f);
+  VPos = float4(texCoord * float2(2.f, -2.f) + float2(-1.f, 1.f), 0.f, 1.f);
 
 // black flower lowering
 #define rollOffStoppingPoint      FuncParms0.x
@@ -50,6 +49,20 @@ void VS_PrepareHdrBlackFloorFix(
 
     rollOffMinusOldBlackPoint = Csp::Trc::LinearTo::Pq(rollOffStoppingPoint) - oldBlackPoint;
   }
+  else if (Ui::HdrBlackFloorFix::Lowering::ProcessingMode == PRO_MODE_ICTCP)
+  {
+    float2 lmRollOffStoppingPoint = (Csp::Ictcp::Bt2020To::PqLms(rollOffStoppingPoint)).xy;
+    float2 lmOldBlackPoint        = (Csp::Ictcp::Bt2020To::PqLms(oldBlackPoint)).xy;
+    float2 lmNewBlackPoint        = (Csp::Ictcp::Bt2020To::PqLms(abs(newBlackPoint))).xy;
+
+    rollOffStoppingPoint = 0.5f * lmRollOffStoppingPoint.x + 0.5f * lmRollOffStoppingPoint.y;
+    oldBlackPoint        = 0.5f * lmOldBlackPoint.x        + 0.5f * lmOldBlackPoint.y;
+
+    newBlackPoint = sign(newBlackPoint)
+                  * (0.5f * lmNewBlackPoint.x + 0.5f * lmNewBlackPoint.y);
+
+    rollOffMinusOldBlackPoint = rollOffStoppingPoint - oldBlackPoint;
+  }
   else
   {
     rollOffStoppingPoint = Csp::Trc::LinearTo::Pq(rollOffStoppingPoint);
@@ -70,11 +83,10 @@ void VS_PrepareHdrBlackFloorFix(
 
 
 void PS_HdrBlackFloorFix(
-                      float4 VPos         : SV_Position,
-                      float2 TexCoord     : TEXCOORD0,
-  out                 float4 Output       : SV_Target0,
-  in  nointerpolation float4 FuncParms0   : FuncParms0,
-  in  nointerpolation float  FuncParms1   : FuncParms1)
+  in                  float4 VPos       : SV_Position,
+  out                 float4 Output     : SV_Target0,
+  in  nointerpolation float4 FuncParms0 : FuncParms0,
+  in  nointerpolation float  FuncParms1 : FuncParms1)
 {
   if (!Ui::HdrBlackFloorFix::Gamma22Emu::EnableGamma22Emu
    && !Ui::HdrBlackFloorFix::Lowering::EnableLowering)
@@ -82,35 +94,37 @@ void PS_HdrBlackFloorFix(
     discard;
   }
 
-  float3 hdr = tex2D(ReShade::BackBuffer, TexCoord).rgb;
+  const float4 inputColour = tex2Dfetch(ReShade::BackBuffer, int2(VPos.xy));
+
+  float3 colour = inputColour.rgb;
 
 #if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
 
-  hdr /= 125.f;
+  colour /= 125.f;
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
 
-  hdr = Csp::Trc::PqTo::Linear(hdr);
+  colour = Csp::Trc::PqTo::Linear(colour);
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
 
-  hdr = Csp::Trc::HlgTo::Linear(hdr);
+  colour = Csp::Trc::HlgTo::Linear(colour);
 
 #else //ACTUAL_COLOUR_SPACE ==
 
-  hdr = float3(0.f, 0.f, 0.f);
+  colour = float3(0.f, 0.f, 0.f);
 
 #endif //ACTUAL_COLOUR_SPACE ==
 
 
   if (Ui::HdrBlackFloorFix::Gamma22Emu::EnableGamma22Emu)
   {
-    Gamma22Emulation(hdr,
+    Gamma22Emulation(colour,
                      whitePointNormalised);
 
     if (Ui::HdrBlackFloorFix::Lowering::EnableLowering)
     {
-      LowerBlackFloor(hdr,
+      LowerBlackFloor(colour,
                       rollOffStoppingPoint,
                       oldBlackPoint,
                       rollOffMinusOldBlackPoint,
@@ -122,33 +136,33 @@ void PS_HdrBlackFloorFix(
 
       if (Ui::HdrBlackFloorFix::Gamma22Emu::ProcessingColourSpace == HDR_BF_FIX_CSP_DCI_P3)
       {
-        hdr = Csp::Mat::DciP3To::Bt709(hdr);
+        colour = Csp::Mat::DciP3To::Bt709(colour);
       }
       else if (Ui::HdrBlackFloorFix::Gamma22Emu::ProcessingColourSpace == HDR_BF_FIX_CSP_BT2020)
       {
-        hdr = Csp::Mat::Bt2020To::Bt709(hdr);
+        colour = Csp::Mat::Bt2020To::Bt709(colour);
       }
 
-      hdr *= 125.f;
+      colour *= 125.f;
 
 #elif defined(IS_HDR10_LIKE_CSP)
 
       if (Ui::HdrBlackFloorFix::Gamma22Emu::ProcessingColourSpace == HDR_BF_FIX_CSP_BT709)
       {
-        hdr = Csp::Mat::Bt709To::Bt2020(hdr);
+        colour = Csp::Mat::Bt709To::Bt2020(colour);
       }
       else if (Ui::HdrBlackFloorFix::Gamma22Emu::ProcessingColourSpace == HDR_BF_FIX_CSP_DCI_P3)
       {
-        hdr = Csp::Mat::DciP3To::Bt2020(hdr);
+        colour = Csp::Mat::DciP3To::Bt2020(colour);
       }
 
 #if (ACTUAL_COLOUR_SPACE == CSP_HDR10)
 
-      hdr = Csp::Trc::LinearTo::Pq(hdr);
+      colour = Csp::Trc::LinearTo::Pq(colour);
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
 
-      hdr = Csp::Trc::LinearTo::Hlg(hdr);
+      colour = Csp::Trc::LinearTo::Hlg(colour);
 
 #endif //ACTUAL_COLOUR_SPACE ==
 
@@ -158,14 +172,14 @@ void PS_HdrBlackFloorFix(
   }
   else
   {
-    LowerBlackFloor(hdr,
+    LowerBlackFloor(colour,
                     rollOffStoppingPoint,
                     oldBlackPoint,
                     rollOffMinusOldBlackPoint,
                     minLum);
   }
 
-  Output = float4(hdr, 1.f);
+  Output = float4(colour, inputColour.a);
 }
 
 

@@ -1,6 +1,9 @@
 #pragma once
 
+#pragma warning(disable : 3571) // disable warning about potentially using pow on a negative value
+
 #include "../ReShade.fxh"
+
 
 #ifndef __RESHADE__
   #include "_no.fxh"
@@ -9,10 +12,47 @@
   #define BUFFER_COLOR_SPACE    2
 #endif
 
+
+#if ((__RENDERER__ & 0xB000) == 0xB000)
+  #define API_IS_D3D11
+#elif ((__RENDERER__ & 0xC000) == 0xC000)
+  #define API_IS_D3D12
+#elif ((__RENDERER__ & 0x10000) == 0x10000)
+  #define API_IS_OPENGL
+#elif ((__RENDERER__ & 0x20000) == 0x20000)
+  #define API_IS_VULKAN
+#endif
+
+
+#if (defined(API_IS_VULKAN) \
+  && BUFFER_WIDTH <= 1280   \
+  && BUFFER_HEIGHT <= 800)
+  #define POSSIBLE_DECK_VULKAN_USAGE
+#endif
+
+
+#ifdef GAMESCOPE
+  #ifndef GAMESCOPE_SDR_ON_HDR_NITS
+    #define GAMESCOPE_SDR_ON_HDR_NITS 203.f
+  #endif
+#endif
+
+
 #define STRINGIFY(x) #x
 #define GET_UNKNOWN_NUMBER(x) "unknown (" STRINGIFY(x) ")"
 
 #define VS_PostProcess PostProcessVS
+
+void VS_PostProcessWithoutTexCoord(
+  in  uint   id    : SV_VertexID,
+  out float4 SVPos : SV_Position0)
+{
+  float2 texCoord;
+  texCoord.x = (id == 2) ? 2.f : 0.f;
+  texCoord.y = (id == 1) ? 2.f : 0.f;
+
+  SVPos = float4(texCoord * float2(2.f, -2.f) + float2(-1.f, 1.f), 0.f, 1.f);
+}
 
 #define YES 1
 #define NO  0
@@ -93,7 +133,7 @@
   || ACTUAL_COLOUR_SPACE == CSP_HLG   \
   || ACTUAL_COLOUR_SPACE == CSP_PS5)
 
-  #define IS_POSSIBLE_HDR_CSP
+  #define IS_HDR_CSP
 #endif
 
 #if (ACTUAL_COLOUR_SPACE == CSP_SCRGB \
@@ -108,11 +148,24 @@
   #define IS_HDR10_LIKE_CSP
 #endif
 
+#define GAMMA_UNSET 0
+#define GAMMA_SRGB  1
+#define GAMMA_22    2
+#define GAMMA_24    3
 
-#define CSP_SRGB_TEXT  "sRGB (sRGB transfer function / gamma 2.2 + BT.709 primaries)"
-#define CSP_SCRGB_TEXT "scRGB (linear + BT.709 primaries)"
-#define CSP_HDR10_TEXT "HDR10 (PQ + BT.2020 primaries)"
-#define CSP_HLG_TEXT   "HLG (HLG + BT.2020 primaries)"
+#ifndef IS_HDR_CSP
+  #ifndef OVERWRITE_SDR_GAMMA
+    #define OVERWRITE_SDR_GAMMA GAMMA_UNSET
+  #endif
+#endif
+
+#define CSP_SRGB_DEFAULT_TEXT "sRGB (gamma 2.2 or sRGB transfer function + BT.709 primaries)"
+#define CSP_GAMMA22_TEXT      "Gamma 2.2 (2.2 power gamma + BT.709 primaries)"
+#define CSP_GAMMA24_TEXT      "Gamma 2.4 (2.4 power gamma + BT.709 primaries)"
+#define CSP_SRGB_TEXT         "sRGB (sRGB transfer function + BT.709 primaries)"
+#define CSP_SCRGB_TEXT        "scRGB (linear + BT.709 primaries)"
+#define CSP_HDR10_TEXT        "HDR10 (PQ + BT.2020 primaries)"
+#define CSP_HLG_TEXT          "HLG (HLG + BT.2020 primaries)"
 
 #if (BUFFER_COLOR_BIT_DEPTH == 8)
   #define BACK_BUFFER_FORMAT_TEXT "RGBA8_UNORM or BGRA8_UNORM"
@@ -150,27 +203,40 @@
     && defined(IS_POSSIBLE_HDR10_BIT_DEPTH))
   #define BACK_BUFFER_COLOUR_SPACE_TEXT CSP_UNSET_TEXT CSP_HDR10_TEXT
 #elif (BUFFER_COLOR_SPACE == CSP_SRGB)
-  #define BACK_BUFFER_COLOUR_SPACE_TEXT CSP_SRGB_TEXT
+  #define BACK_BUFFER_COLOUR_SPACE_TEXT CSP_SRGB_DEFAULT_TEXT
 #else
   #define BACK_BUFFER_COLOUR_SPACE_TEXT GET_UNKNOWN_NUMBER(BUFFER_COLOR_SPACE)
 #endif
 
 
-#if (CSP_OVERRIDE == CSP_SRGB)
-  #define CSP_OVERRIDE_TEXT CSP_SRGB_TEXT
-#elif (CSP_OVERRIDE == CSP_SCRGB)
+#if (CSP_OVERRIDE == CSP_SCRGB)
   #define CSP_OVERRIDE_TEXT CSP_SCRGB_TEXT
 #elif (CSP_OVERRIDE == CSP_HDR10)
   #define CSP_OVERRIDE_TEXT CSP_HDR10_TEXT
 #elif (CSP_OVERRIDE == CSP_HLG)
   #define CSP_OVERRIDE_TEXT CSP_HLG_TEXT
+#elif ((CSP_OVERRIDE == CSP_SRGB || ACTUAL_COLOUR_SPACE == CSP_SRGB) \
+    && OVERWRITE_SDR_GAMMA != GAMMA_UNSET)
+  #if (OVERWRITE_SDR_GAMMA == GAMMA_24)
+    #define CSP_OVERRIDE_TEXT CSP_GAMMA24_TEXT
+  #elif (OVERWRITE_SDR_GAMMA == GAMMA_SRGB)
+    #define CSP_OVERRIDE_TEXT CSP_SRGB_TEXT
+  #else
+    #define CSP_OVERRIDE_TEXT CSP_GAMMA22_TEXT
+  #endif
 #else
   #define CSP_OVERRIDE_TEXT "unset"
 #endif
 
 
 #if (ACTUAL_COLOUR_SPACE == CSP_SRGB)
-  #define ACTUAL_CSP_TEXT CSP_SRGB_TEXT
+  #if (OVERWRITE_SDR_GAMMA == GAMMA_24)
+    #define ACTUAL_CSP_TEXT CSP_GAMMA24_TEXT
+  #elif (OVERWRITE_SDR_GAMMA == GAMMA_SRGB)
+    #define ACTUAL_CSP_TEXT CSP_SRGB_TEXT
+  #else
+    #define ACTUAL_CSP_TEXT CSP_GAMMA22_TEXT
+  #endif
 #elif (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
   #define ACTUAL_CSP_TEXT CSP_SCRGB_TEXT
 #elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
@@ -211,9 +277,10 @@
   #define INFO_TEXT_ALLOWED_CSP_OVERRIDE "none!"
 #endif
 
-#if (HIDE_CSP_OVERRIDE_EXPLANATION == YES \
-  || defined(IS_FLOAT_HDR_CSP)            \
-  || defined(IS_HDR10_LIKE_CSP))
+#if ((HIDE_CSP_OVERRIDE_EXPLANATION == YES) \
+  || defined(IS_FLOAT_HDR_CSP)              \
+  || defined(IS_HDR10_LIKE_CSP)             \
+  || (BUFFER_COLOR_BIT_DEPTH <= 8))
   #define INFO_TEXT INFO_TEXT_BACK_BUFFER
 #else
   #define INFO_TEXT INFO_TEXT_BACK_BUFFER          \
@@ -231,11 +298,14 @@ uniform int GLOBAL_INFO
 >;
 
 
-#if (__RENDERER__ & 0x10000 \
-  || __RENDERER__ < 0xB000)
-  #define ERROR_TEXT "Only DirectX 11, 12 and Vulkan are supported!"
-#else
+#if (defined(API_IS_D3D11)   \
+  || defined(API_IS_D3D12)   \
+  || defined(API_IS_OPENGL)  \
+  || defined(API_IS_VULKAN))
+  #define IS_HDR_COMPATIBLE_API
   #define ERROR_TEXT "Only HDR colour spaces are supported!"
+#else
+  #define ERROR_TEXT "Only DirectX 11, 12, OpenGL and Vulkan are supported!"
 #endif
 
 #define ERROR_STUFF           \
@@ -261,6 +331,23 @@ uniform int GLOBAL_INFO
       DispatchSizeY = 1;              \
     }                                 \
   }
+
+
+#define PI 3.1415927410125732421875f
+
+#define FP32_MAX asfloat(0x7F7FFFFF)
+
+#define INT_MAX 2147483647
+
+#define MIN3(A, B, C) min(A, min(B, C))
+
+#define MAX3(A, B, C) max(A, max(B, C))
+
+#define MAX4(A, B, C, D) max(A, max(B, max(C, D)))
+
+#define MAX5(A, B, C, D, E) max(A, max(B, max(C, max(D, E))))
+
+#define MAXRGB(Rgb) max(Rgb.r, max(Rgb.g, Rgb.b))
 
 
 namespace Csp
@@ -333,7 +420,7 @@ namespace Csp
 
         if (absC > 1.f)
         {
-          return signC * (1.055f * pow(absC, (1.f / 2.4f)) - 0.055f);
+          return signC * ((1.055f * pow(absC - 0.940277040004730224609375f, (1.f / 2.4f)) - 0.055f) + 0.728929579257965087890625f);
         }
         else if (absC > 0.04045f)
         {
@@ -371,34 +458,37 @@ namespace Csp
     } //ExtendedSrgbTo
 
 
-    namespace LinearTo
-    {
-      float ExtendedSrgb(float C)
-      {
-        static const float absC  = abs(C);
-        static const float signC = sign(C);
-
-        if (absC > 1.f)
-        {
-          return signC * pow((absC + 0.055f) / 1.055f, 2.4f);
-        }
-        else if (absC > 0.0031308f)
-        {
-          return signC * (1.055f * pow(absC, (1.f / 2.4f)) - 0.055f);
-        }
-        else
-        {
-          return C * 12.92f;
-        }
-      }
-
-      float3 ExtendedSrgb(float3 Colour)
-      {
-        return float3(Csp::Trc::LinearTo::ExtendedSrgb(Colour.r),
-                      Csp::Trc::LinearTo::ExtendedSrgb(Colour.g),
-                      Csp::Trc::LinearTo::ExtendedSrgb(Colour.b));
-      }
-    }
+// DO NOT USE!!!
+// it does not match the ExtendedSrgbToLinear version!
+//
+//    namespace LinearTo
+//    {
+//      float ExtendedSrgb(float C)
+//      {
+//        static const float absC  = abs(C);
+//        static const float signC = sign(C);
+//
+//        if (absC > 1.f)
+//        {
+//          return signC * pow((absC - 0.728929579257965087890625f + 0.055f) / 1.055f, 2.4f) + 0.940277040004730224609375f;
+//        }
+//        else if (absC > 0.0031308f)
+//        {
+//          return signC * (1.055f * pow(absC, (1.f / 2.4f)) - 0.055f);
+//        }
+//        else
+//        {
+//          return C * 12.92f;
+//        }
+//      }
+//
+//      float3 ExtendedSrgb(float3 Colour)
+//      {
+//        return float3(Csp::Trc::LinearTo::ExtendedSrgb(Colour.r),
+//                      Csp::Trc::LinearTo::ExtendedSrgb(Colour.g),
+//                      Csp::Trc::LinearTo::ExtendedSrgb(Colour.b));
+//      }
+//    }
 
 
     namespace SrgbAccurateTo
@@ -463,7 +553,7 @@ namespace Csp
         {
           return signC * (1.055f * pow(absC, (1.f / 2.4f)) - 0.055f);
         }
-        else if (C > SrgbX)
+        else if (absC > SrgbX)
         {
           return signC * pow((absC + 0.055f) / 1.055f, 2.4f);
         }
@@ -489,11 +579,11 @@ namespace Csp
         static const float absC  = abs(C);
         static const float signC = sign(C);
 
-        if (C > 1.f)
+        if (absC > 1.f)
         {
           return signC * pow((absC + 0.055f) / 1.055f, 2.4f);
         }
-        else if (C > SrgbXDivPhi)
+        else if (absC > SrgbXDivPhi)
         {
           return signC * (1.055f * pow(absC, (1.f / 2.4f)) - 0.055f);
         }
@@ -513,7 +603,7 @@ namespace Csp
 
 
     static const float RemoveGamma22 = 2.2f;
-    static const float ApplyGamma22  = 1.f / RemoveGamma22;
+    static const float ApplyGamma22  = 1.f / 2.2f;
 
     namespace ExtendedGamma22To
     {
@@ -526,13 +616,13 @@ namespace Csp
         static const float absC  = abs(C);
         static const float signC = sign(C);
 
-        if (C > 1.f)
+        if (absC <= 1.f)
         {
-          return signC * pow(absC, Csp::Trc::ApplyGamma22);
+          return signC * pow(absC, Csp::Trc::RemoveGamma22);
         }
         else
         {
-          return signC * pow(absC, Csp::Trc::RemoveGamma22);
+          return signC * (pow(absC - 0.944479882717132568359375f, Csp::Trc::ApplyGamma22) + 0.731282770633697509765625f);
         }
       }
       //{
@@ -560,7 +650,7 @@ namespace Csp
 
 
     static const float RemoveGamma24 = 2.4f;
-    static const float ApplyGamma24  = 1.f / RemoveGamma24;
+    static const float ApplyGamma24  = 1.f / 2.4f;
 
     namespace ExtendedGamma24To
     {
@@ -573,13 +663,13 @@ namespace Csp
         static const float absC  = abs(C);
         static const float signC = sign(C);
 
-        if (absC > 1.f)
+        if (absC <= 1.f)
         {
-          return signC * pow(absC, Csp::Trc::ApplyGamma24);
+          return signC * pow(absC, Csp::Trc::RemoveGamma24);
         }
         else
         {
-          return signC * pow(absC, Csp::Trc::RemoveGamma24);
+          return signC * (pow(absC - 0.950292885303497314453125f, Csp::Trc::ApplyGamma24) + 0.71368694305419921875f);
         }
       }
       //{
@@ -641,7 +731,7 @@ namespace Csp
       static const float absC = abs(C);
       static const float signC = sign(C);
 
-      if (C > 1.f)
+      if (absC > 1.f)
       {
         return signC * pow(absC, inverseAdjust);
       }
@@ -788,7 +878,7 @@ namespace Csp
       {
         if (X <= 0.5f)
         {
-          return pow(X, 2.f) / 3.f;
+          return (X * X) / 3.f;
         }
         else
         {
@@ -960,126 +1050,126 @@ namespace Csp
   namespace Mat
   {
 
-    //BT709 To
-    #define Bt709ToXYZ float3x3( \
-      asfloat(0x3ed30367), asfloat(0x3eb7212e), asfloat(0x3e38af74), \
-      asfloat(0x3e599b82), asfloat(0x3f37212e), asfloat(0x3d93bf90), \
-      asfloat(0x3c9e428d), asfloat(0x3df42c3d), asfloat(0x3f732b47))
+    //BT.709 To
+    static const float3x3 Bt709ToXYZ = float3x3(
+      0.4123907983303070068359375f,    0.3575843274593353271484375f,   0.18048079311847686767578125f,
+      0.2126390039920806884765625f,    0.715168654918670654296875f,    0.072192318737506866455078125f,
+      0.0193308182060718536376953125f, 0.119194783270359039306640625f, 0.950532138347625732421875f);
 
-    #define Bt709ToDciP3 float3x3( \
-      asfloat(0x3f528482), asfloat(0x3e35edf7), asfloat(0x00000000), \
-      asfloat(0x3d07d945), asfloat(0x3f77826c), asfloat(0x00000000), \
-      asfloat(0x3c8bf0d0), asfloat(0x3d946634), asfloat(0x3f6913b3))
+    static const float3x3 Bt709ToDciP3 = float3x3(
+      0.82246196269989013671875f,    0.17753803730010986328125f,   0.f,
+      0.03319419920444488525390625f, 0.96680581569671630859375f,   0.f,
+      0.017082631587982177734375f,   0.0723974406719207763671875f, 0.91051995754241943359375f);
 
-    #define Bt709ToBt2020 float3x3( \
-      asfloat(0x3f2091d6), asfloat(0x3ea8b132), asfloat(0x3d31590c), \
-      asfloat(0x3d8d65d4), asfloat(0x3f6b6b47), asfloat(0x3c39ff93), \
-      asfloat(0x3c8646c7), asfloat(0x3db467e0), asfloat(0x3f6540ce))
+    static const float3x3 Bt709ToBt2020 = float3x3(
+      0.627403914928436279296875f,      0.3292830288410186767578125f,  0.0433130674064159393310546875f,
+      0.069097287952899932861328125f,   0.9195404052734375f,           0.011362315155565738677978515625f,
+      0.01639143936336040496826171875f, 0.08801330626010894775390625f, 0.895595252513885498046875f);
 
-    #define Bt709ToAp0 float3x3( \
-      asfloat(0x3edd85ea), asfloat(0x3ec03edb), asfloat(0x3e41ca37), \
-      asfloat(0x3db70132), asfloat(0x3f5115e0), asfloat(0x3dd2d816), \
-      asfloat(0x3c9ce021), asfloat(0x3df2096b), asfloat(0x3f710ab5))
+    static const float3x3 Bt709ToAp1D65 = float3x3(
+      0.61702883243560791015625f,       0.333867609500885009765625f,    0.04910354316234588623046875f,
+      0.069922320544719696044921875f,   0.91734969615936279296875f,     0.012727967463433742523193359375f,
+      0.02054978720843791961669921875f, 0.107552029192447662353515625f, 0.871898174285888671875f);
 
-    #define Bt709ToAp0D65 float3x3( \
-      asfloat(0x3ede1a54), asfloat(0x3ec0bfa6), asfloat(0x3e424c0c), \
-      asfloat(0x3db55d0f), asfloat(0x3f4f35dd), asfloat(0x3dd0f409), \
-      asfloat(0x3c91672b), asfloat(0x3de05619), asfloat(0x3f5f6a04))
+    static const float3x3 Bt709ToAp0D65 = float3x3(
+      0.4339316189289093017578125f,   0.3762523829936981201171875f,   0.1898159682750701904296875f,
+      0.088618390262126922607421875f, 0.809275329113006591796875f,    0.10210628807544708251953125f,
+      0.01775003969669342041015625f,  0.109447620809078216552734375f, 0.872802317142486572265625f);
 
 
     //DCI-P3 To
-    #define DciP3ToXYZ float3x3( \
-      asfloat(0x3ef90234), asfloat(0x3e880d6a), asfloat(0x3e4ad95f), \
-      asfloat(0x3e6a5c6d), asfloat(0x3f311ff5), asfloat(0x3da2477f), \
-      asfloat(0xa4371835), asfloat(0x3d38d36f), asfloat(0x3f858ad6))
+    static const float3x3 DciP3ToXYZ = float3x3(
+      0.48657095432281494140625f,    0.2656677067279815673828125f,    0.19821728765964508056640625f,
+      0.22897456586360931396484375f, 0.691738545894622802734375f,     0.079286910593509674072265625f,
+      0.f,                           0.0451133809983730316162109375f, 1.04394435882568359375f);
 
-    #define DciP3ToBt709 float3x3( \
-      asfloat(0x3f9cd111), asfloat(0xbe668885), asfloat(0x00000000), \
-      asfloat(0xbd2c2441), asfloat(0x3f856122), asfloat(0x00000000), \
-      asfloat(0xbca0e81b), asfloat(0xbda1318b), asfloat(0x3f8c96b9))
+    static const float3x3 DciP3ToBt709 = float3x3(
+       1.22494018077850341796875f,     -0.22494018077850341796875f,     0.f,
+      -0.042056955397129058837890625f,  1.04205691814422607421875f,     0.f,
+      -0.0196375548839569091796875f,   -0.078636042773723602294921875f, 1.09827363491058349609375f);
 
-    #define DciP3ToBt2020 float3x3( \
-      asfloat(0x3f40f4cd), asfloat(0x3e4b7a3f), asfloat(0x3d42ca3a), \
-      asfloat(0x3d3b3edf), asfloat(0x3f711ae8), asfloat(0x3c4c4a8d), \
-      asfloat(0xba9ea9eb), asfloat(0x3c90500c), asfloat(0x3f7bccd5))
-
-
-    //BT2020 To
-    #define Bt2020ToXYZ float3x3( \
-      asfloat(0x3f2301b3), asfloat(0x3e141d60), asfloat(0x3e2cd46f), \
-      asfloat(0x3e86751c), asfloat(0x3f2d9964), asfloat(0x3d72c0da), \
-      asfloat(0x24663c41), asfloat(0x3ce60373), asfloat(0x3f87b964))
-
-    #define Bt2020ToBt709 float3x3( \
-      asfloat(0x3fd49a76), asfloat(0xbf168e8e), asfloat(0xbd9532ef), \
-      asfloat(0xbdfeede7), asfloat(0x3f91003a), asfloat(0xbc08ae06), \
-      asfloat(0xbc94be52), asfloat(0xbdce2a32), asfloat(0x3f8f359c))
-
-    #define Bt2020ToDciP3 float3x3( \
-      asfloat(0x3fac0014), asfloat(0xbe9091cc), asfloat(0xbd7b7427), \
-      asfloat(0xbd85a785), asfloat(0x3f89b1f0), asfloat(0xbc2bbbc8), \
-      asfloat(0x3b38fb22), asfloat(0xbca0adef), asfloat(0x3f82263a))
-
-    #define Bt2020ToAp0 float3x3( \
-      asfloat(0x3f2b204d), asfloat(0x3e1b7d5c), asfloat(0x3e355532), \
-      asfloat(0x3d37d982), asfloat(0x3f5cbfe1), asfloat(0x3dd09c7c), \
-      asfloat(0x246438a6), asfloat(0x3ce40057), asfloat(0x3f868970))
-
-    #define Bt2020ToAp0D65 float3x3( \
-      asfloat(0x3f2b92f2), asfloat(0x3e1be588), asfloat(0x3e35ceaf), \
-      asfloat(0x3d36336f), asfloat(0x3f5ac517), asfloat(0x3dcebd90), \
-      asfloat(0x245387fa), asfloat(0x3cd353c9), asfloat(0x3f796562))
+    static const float3x3 DciP3ToBt2020 = float3x3(
+       0.7538330554962158203125f,         0.198597371578216552734375f,     0.047569595277309417724609375f,
+       0.0457438491284847259521484375f,   0.94177722930908203125f,         0.01247893087565898895263671875f,
+      -0.001210340298712253570556640625f, 0.0176017172634601593017578125f, 0.98360860347747802734375f);
 
 
-    //AP0_D65 To
-    #define Ap0D65ToXYZ float3x3( \
-      asfloat(0x3f733787), asfloat(0x00000000), asfloat(0x38d3f58d), \
-      asfloat(0x3eafa6b1), asfloat(0x3f3c18ec), asfloat(0xbd9f6224), \
-      asfloat(0x00000000), asfloat(0x00000000), asfloat(0x3f8b5172))
+    //BT.2020 To
+    static const float3x3 Bt2020ToXYZ = float3x3(
+      0.636958062648773193359375f, 0.144616901874542236328125f,    0.1688809692859649658203125f,
+      0.26270020008087158203125f,  0.677998065948486328125f,       0.0593017153441905975341796875f,
+      0.f,                         0.028072692453861236572265625f, 1.060985088348388671875f);
 
-    #define Ap0D65ToBt709 float3x3( \
-      asfloat(0x40236918), asfloat(0xbf90adb1), asfloat(0xbed891fa), \
-      asfloat(0xbe8debcb), asfloat(0x3fb06336), asfloat(0xbdce842d), \
-      asfloat(0xbc8c6432), asfloat(0xbe19935b), asfloat(0x3f9563fc))
+    static const float3x3 Bt2020ToBt709 = float3x3(
+       1.66049098968505859375f,          -0.58764111995697021484375f,    -0.072849862277507781982421875f,
+      -0.12455047667026519775390625f,     1.13289988040924072265625f,    -0.0083494223654270172119140625f,
+      -0.01815076358616352081298828125f, -0.100578896701335906982421875f, 1.11872971057891845703125f);
 
-    #define Ap0D65ToBt2020 float3x3( \
-      asfloat(0x3fc1349d), asfloat(0xbe85d8a7), asfloat(0xbe7df398), \
-      asfloat(0xbda16a2b), asfloat(0x3f98000b), asfloat(0xbdde968c), \
-      asfloat(0x3b08c699), asfloat(0xbd00cc5e), asfloat(0x3f83c200))
+    static const float3x3 Bt2020ToDciP3 = float3x3(
+       1.34357821941375732421875f,        -0.2821796834468841552734375f,    -0.06139858067035675048828125f,
+      -0.0652974545955657958984375f,       1.07578790187835693359375f,      -0.010490463115274906158447265625f,
+       0.002821787260472774505615234375f, -0.0195984952151775360107421875f,  1.01677668094635009765625f);
+
+    static const float3x3 Bt2020ToAp1D65 = float3x3(
+      0.982096254825592041015625f,          0.010708245448768138885498046875f, 0.0071955197490751743316650390625f,
+      0.001618025242350995540618896484375f, 0.996895968914031982421875f,       0.001485982094891369342803955078125f,
+      0.00490146316587924957275390625f,     0.02207522280514240264892578125f,  0.97302329540252685546875f);
+
+    static const float3x3 Bt2020ToAp0D65 = float3x3(
+      0.67023181915283203125f,         0.152168750762939453125f,         0.17759941518306732177734375f,
+      0.0445011146366596221923828125f, 0.854482352733612060546875f,      0.101016514003276824951171875f,
+      0.f,                             0.02577704750001430511474609375f, 0.974222958087921142578125f);
 
 
-    //AP1_D65 To
-    #define Ap1D65ToXYZ float3x3( \
-      asfloat(0x3f25b4f9), asfloat(0x3e09a10b), asfloat(0x3e2c83ae), \
-      asfloat(0x3e8830ec), asfloat(0x3f2d1439), asfloat(0x3d6d350f), \
-      asfloat(0xbbb27d47), asfloat(0x3b857560), asfloat(0x3f8b7e7a))
+    //AP1 D65 To
+    static const float3x3 Ap1D65ToXYZ = float3x3(
+       0.647507190704345703125f,         0.13437913358211517333984375f,     0.1685695946216583251953125f,
+       0.266086399555206298828125f,      0.67596781253814697265625f,        0.057945795357227325439453125f,
+      -0.00544886849820613861083984375f, 0.004072095267474651336669921875f, 1.090434551239013671875f);
+
+
+    //AP0 D65 To
+    static const float3x3 Ap0D65ToXYZ = float3x3(
+      0.9503548145294189453125f,  0.f,                      0.000101128956885077059268951416015625f,
+      0.34317290782928466796875f, 0.73469638824462890625f, -0.07786929607391357421875f,
+      0.f,                        0.f,                      1.08905780315399169921875f);
+
+    static const float3x3 Ap0D65ToBt709 = float3x3(
+       2.552483081817626953125f,         -1.12950992584228515625f,      -0.422973215579986572265625f,
+      -0.2773441374301910400390625f,      1.3782665729522705078125f,    -0.1009224355220794677734375f,
+      -0.01713105104863643646240234375f, -0.14986114203929901123046875f, 1.1669921875f);
+
+    static const float3x3 Ap0D65ToBt2020 = float3x3(
+       1.50937116146087646484375f,         -0.261310040950775146484375f,     -0.24806107580661773681640625f,
+      -0.078854121267795562744140625f,      1.18762290477752685546875f,      -0.10876882076263427734375f,
+       0.0020864079706370830535888671875f, -0.0314234159886837005615234375f,  1.02933704853057861328125f);
 
 
     //XYZ To
-    #define XYZToBt709 float3x3( \
-      asfloat(0x404f8cf8), asfloat(0xbfc4e833), asfloat(0xbeff726c), \
-      asfloat(0xbf781040), asfloat(0x3ff0101f), asfloat(0x3d2a2a97), \
-      asfloat(0x3d640478), asfloat(0xbe510419), asfloat(0x3f8762a7))
+    static const float3x3 XYZToBt709 = float3x3(
+       3.2409698963165283203125f,      -1.53738319873809814453125f,  -0.4986107647418975830078125f,
+      -0.96924364566802978515625f,      1.875967502593994140625f,     0.0415550582110881805419921875f,
+       0.055630080401897430419921875f, -0.2039769589900970458984375f, 1.05697154998779296875f);
 
-    #define XYZToDciP3 float3x3( \
-      asfloat(0x401fa870), asfloat(0xbf6e8b86), asfloat(0xbece48a3), \
-      asfloat(0xbf544d2f), asfloat(0x3fe19202), asfloat(0x3cc17d6f), \
-      asfloat(0x3d12ea50), asfloat(0xbd9c18f5), asfloat(0x3f751d26))
+    static const float3x3 XYZToDciP3 = float3x3(
+       2.49349689483642578125f,       -0.931383609771728515625f,      -0.40271079540252685546875f,
+      -0.8294889926910400390625f,      1.7626640796661376953125f,      0.02362468652427196502685546875f,
+       0.03584583103656768798828125f, -0.076172389090061187744140625f, 0.95688450336456298828125f);
 
-    #define XYZToBt2020 float3x3( \
-      asfloat(0x3fdbce13), asfloat(0xbeb62a1a), asfloat(0xbe81c45a), \
-      asfloat(0xbf2aa3da), asfloat(0x3fcedf31), asfloat(0x3c812701), \
-      asfloat(0x3c9097ca), asfloat(0xbd2f4b4e), asfloat(0x3f7152ee))
+    static const float3x3 XYZToBt2020 = float3x3(
+       1.7166512012481689453125f,       -0.3556707799434661865234375f,   -0.253366291522979736328125f,
+      -0.666684329509735107421875f,      1.61648118495941162109375f,      0.0157685466110706329345703125f,
+       0.0176398567855358123779296875f, -0.0427706129848957061767578125f, 0.9421031475067138671875f);
 
-    #define XYZToAp1 float3x3( \
-      asfloat(0x3fd20d0e), asfloat(0xbea64c9e), asfloat(0xbe721951), \
-      asfloat(0xbf29e5cf), asfloat(0x3fcec330), asfloat(0x3c89449c), \
-      asfloat(0x3c400d30), asfloat(0xbc07bb78), asfloat(0x3f7d0772))
+    static const float3x3 XYZToAp1D65 = float3x3(
+       1.67890453338623046875f,           -0.33230102062225341796875f,        -0.2418822944164276123046875f,
+      -0.661811172962188720703125f,        1.6108245849609375f,                0.0167095959186553955078125f,
+       0.010860889218747615814208984375f, -0.0076759266667068004608154296875f, 0.915794551372528076171875f);
 
-    #define XYZToAp0 float3x3( \
-      asfloat(0x3f866035), asfloat(0x00000000), asfloat(0xb8cc709d), \
-      asfloat(0xbefde700), asfloat(0x3fafc8b9), asfloat(0x3dc93212), \
-      asfloat(0x00000000), asfloat(0x00000000), asfloat(0x3f7dc2b1))
+    static const float3x3 XYZToAp0D65 = float3x3(
+       1.05223858356475830078125f,   0.f,                      -0.0000977099625742994248867034912109375f,
+      -0.4914952218532562255859375f, 1.361106395721435546875f,  0.097366832196712493896484375f,
+       0.f,                          0.f,                       0.91822493076324462890625f);
 
 
     namespace Bt709To
@@ -1099,9 +1189,9 @@ namespace Csp
         return mul(Bt709ToBt2020, Colour);
       }
 
-      float3 Ap0(float3 Colour)
+      float3 Ap1D65(float3 Colour)
       {
-        return mul(Bt709ToAp0, Colour);
+        return mul(Bt709ToAp1D65, Colour);
       }
 
       float3 Ap0D65(float3 Colour)
@@ -1145,9 +1235,9 @@ namespace Csp
         return mul(Bt2020ToDciP3, Colour);
       }
 
-      float3 Ap0(float3 Colour)
+      float3 Ap1D65(float3 Colour)
       {
-        return mul(Bt2020ToAp0, Colour);
+        return mul(Bt2020ToAp1D65, Colour);
       }
 
       float3 Ap0D65(float3 Colour)
@@ -1199,14 +1289,14 @@ namespace Csp
         return mul(XYZToBt2020, Colour);
       }
 
-      float3 Ap1(float3 Colour)
+      float3 Ap1D65(float3 Colour)
       {
-        return mul(XYZToAp1, Colour);
+        return mul(XYZToAp1D65, Colour);
       }
 
-      float3 Ap0(float3 Colour)
+      float3 Ap0D65(float3 Colour)
       {
-        return mul(XYZToAp0, Colour);
+        return mul(XYZToAp0D65, Colour);
       }
     } //XYZTo
 
@@ -1216,9 +1306,8 @@ namespace Csp
   namespace Ictcp
   {
 
-    namespace Mat
-    {
-
+    //namespace Mat
+    //{
       //L'M'S'->ICtCp
       #define PqLmsToIctcp float3x3( \
         asfloat(0x3f000000), asfloat(0x3f000000), asfloat(0x00000000), \
@@ -1280,91 +1369,1318 @@ namespace Csp
         asfloat(0x400b6fa4), asfloat(0xbfb2a0ea), asfloat(0x3e5ec243), \
         asfloat(0xbf066ee2), asfloat(0x3fc95067), asfloat(0xbd43c9e9), \
         asfloat(0xbd39c263), asfloat(0xbd3a029f), asfloat(0x3f8bb7fe)) \
+    //} //Mat
 
-      namespace IctcpTo
+    namespace IctcpTo
+    {
+      //ICtCp->L'M'S'
+      float3 PqLms(float3 Ictcp)
       {
-        //ICtCp->L'M'S'
-        float3 PqLms(float3 Colour)
-        {
-          return mul(IctcpToPqLms, Colour);
-        }
-      } //IctcpTo
+        return mul(IctcpToPqLms, Ictcp);
+      }
+    } //IctcpTo
 
-      namespace PqLmsTo
+    namespace PqLmsTo
+    {
+      //L'M'S'->ICtCp
+      float3 Ictcp(float3 PqLms)
       {
-        //L'M'S'->ICtCp
-        float3 Ictcp(float3 Colour)
-        {
-          return mul(PqLmsToIctcp, Colour);
-        }
-      } //PqLmsTo
+        return mul(PqLmsToIctcp, PqLms);
+      }
 
-      namespace Bt709To
+      //L'M'S'->LMS
+      float3 Lms(float3 PqLms)
       {
-        //RGB BT.709->LMS
-        float3 Lms(float3 Colour)
-        {
-          return mul(Bt709ToLms, Colour);
-        }
-      } //Bt709To
+        return Csp::Trc::PqTo::Linear(PqLms);
+      }
+    } //PqLmsTo
 
-      namespace DciP3To
+    namespace IctcpTo
+    {
+      //ICtCp->LMS
+      float3 Lms(float3 Ictcp)
       {
-        //RGB DCI-P3->LMS
-        float3 Lms(float3 Colour)
-        {
-          return mul(DciP3ToLms, Colour);
-        }
-      } //DciP3To
+        float3 pqLms = IctcpTo::PqLms(Ictcp);
 
-      namespace Bt2020To
+        //LMS
+        return PqLmsTo::Lms(pqLms);
+      }
+    } //IctcpTo
+
+    namespace LmsTo
+    {
+      //LMS->L'M'S'
+      float3 PqLms(float3 Lms)
       {
-        //RGB BT.2020->LMS
-        float3 Lms(float3 Colour)
-        {
-          return mul(Bt2020ToLms, Colour);
-        }
-      } //Bt2020To
+        return Csp::Trc::LinearTo::Pq(Lms);
+      }
 
-      namespace Ap0D65To
+      //LMS->ICtCp
+      float3 Ictcp(float3 Lms)
       {
-        //RGB AP0_D65->LMS
-        float3 Lms(float3 Colour)
-        {
-          return mul(Ap0D65ToLms, Colour);
-        }
-      } //Ap0D65To
+        float3 pqLms = LmsTo::PqLms(Lms);
 
-      namespace LmsTo
+        //ICtCp
+        return PqLmsTo::Ictcp(pqLms);
+      }
+
+      //LMS->RGB BT.709
+      float3 Bt709(float3 Colour)
       {
-        //LMS->RGB BT.709
-        float3 Bt709(float3 Colour)
-        {
-          return mul(LmsToBt709, Colour);
-        }
+        return mul(LmsToBt709, Colour);
+      }
 
-        //LMS->RGB DCI-P3
-        float3 DciP3(float3 Colour)
-        {
-          return mul(LmsToDciP3, Colour);
-        }
+      //LMS->RGB DCI-P3
+      float3 DciP3(float3 Colour)
+      {
+        return mul(LmsToDciP3, Colour);
+      }
 
-        //LMS->RGB BT.2020
-        float3 Bt2020(float3 Colour)
-        {
-          return mul(LmsToBt2020, Colour);
-        }
+      //LMS->RGB BT.2020
+      float3 Bt2020(float3 Colour)
+      {
+        return mul(LmsToBt2020, Colour);
+      }
 
-        //LMS->RGB AP0_D65
-        float3 Ap0D65(float3 Colour)
-        {
-          return mul(LmsToAp0D65, Colour);
-        }
-      } //LmsTo
+      //LMS->RGB AP0_D65
+      float3 Ap0D65(float3 Colour)
+      {
+        return mul(LmsToAp0D65, Colour);
+      }
+    } //LmsTo
 
-    } //Mat
+    namespace PqLmsTo
+    {
+      //L'M'S'->RGB BT.709
+      float3 Bt709(float3 PqLms)
+      {
+        float3 lms = PqLmsTo::Lms(PqLms);
+
+        //BT.709
+        return LmsTo::Bt709(lms);
+      }
+
+      //L'M'S'->RGB DCI-P3
+      float3 DciP3(float3 PqLms)
+      {
+        float3 lms = PqLmsTo::Lms(PqLms);
+
+        //DCI-P3
+        return LmsTo::DciP3(lms);
+      }
+
+      //L'M'S'->RGB BT.2020
+      float3 Bt2020(float3 PqLms)
+      {
+        float3 lms = PqLmsTo::Lms(PqLms);
+
+        //BT.2020
+        return LmsTo::Bt2020(lms);
+      }
+
+      //L'M'S'->RGB BT.2020
+      float3 Ap0D65(float3 PqLms)
+      {
+        float3 lms = PqLmsTo::Lms(PqLms);
+
+        //AP0_D65
+        return LmsTo::Ap0D65(lms);
+      }
+    } //PqLmsTo
+
+    namespace IctcpTo
+    {
+      //ICtCp->RGB BT.709
+      float3 Bt709(float3 Ictcp)
+      {
+        float3 lms = IctcpTo::Lms(Ictcp);
+
+        //BT.709
+        return LmsTo::Bt709(lms);
+      }
+
+      //ICtCp->RGB DCI-P3
+      float3 DciP3(float3 Ictcp)
+      {
+        float3 lms = IctcpTo::Lms(Ictcp);
+
+        //BT.709
+        return LmsTo::DciP3(lms);
+      }
+
+      //ICtCp->RGB BT.2020
+      float3 Bt2020(float3 Ictcp)
+      {
+        float3 lms = IctcpTo::Lms(Ictcp);
+
+        //BT.2020
+        return LmsTo::Bt2020(lms);
+      }
+
+      //ICtCp->RGB AP0_D65
+      float3 Ap0D65(float3 Ictcp)
+      {
+        float3 lms = IctcpTo::Lms(Ictcp);
+
+        //AP0_D65
+        return LmsTo::Ap0D65(lms);
+      }
+    } //IctcpTo
+
+    namespace Bt709To
+    {
+      //RGB BT.709->LMS
+      float3 Lms(float3 Colour)
+      {
+        return mul(Bt709ToLms, Colour);
+      }
+
+      //RGB BT.709->L'M'S'
+      float3 PqLms(float3 Rgb)
+      {
+        float3 lms = Bt709To::Lms(Rgb);
+
+        //L'M'S'
+        return LmsTo::PqLms(lms);
+      }
+
+      //RGB BT.709->ICtCp
+      float3 Ictcp(float3 Rgb)
+      {
+        float3 lms = Bt709To::Lms(Rgb);
+
+        //ICtCp
+        return LmsTo::Ictcp(lms);
+      }
+    } //Bt709To
+
+    namespace DciP3To
+    {
+      //RGB DCI-P3->LMS
+      float3 Lms(float3 Colour)
+      {
+        return mul(DciP3ToLms, Colour);
+      }
+
+      //RGB DCI-P3->L'M'S'
+      float3 PqLms(float3 Rgb)
+      {
+        float3 lms = DciP3To::Lms(Rgb);
+
+        //L'M'S'
+        return LmsTo::PqLms(lms);
+      }
+
+      //RGB DCI-P3->ICtCp
+      float3 Ictcp(float3 Rgb)
+      {
+        float3 lms = DciP3To::Lms(Rgb);
+
+        //ICtCp
+        return LmsTo::Ictcp(lms);
+      }
+    } //DciP3To
+
+    namespace Bt2020To
+    {
+      //RGB BT.2020->LMS
+      float3 Lms(float3 Colour)
+      {
+        return mul(Bt2020ToLms, Colour);
+      }
+
+      //RGB BT.2020->L'M'S'
+      float3 PqLms(float3 Rgb)
+      {
+        float3 lms = Bt2020To::Lms(Rgb);
+
+        //L'M'S'
+        return LmsTo::PqLms(lms);
+      }
+
+      //RGB BT.2020->ICtCp
+      float3 Ictcp(float3 Rgb)
+      {
+        float3 lms = Bt2020To::Lms(Rgb);
+
+        //ICtCp
+        return LmsTo::Ictcp(lms);
+      }
+    } //Bt2020To
+
+    namespace Ap0D65To
+    {
+      //RGB AP0_D65->LMS
+      float3 Lms(float3 Colour)
+      {
+        return mul(Ap0D65ToLms, Colour);
+      }
+
+      //RGB AP0_D65->L'M'S'
+      float3 PqLms(float3 Rgb)
+      {
+        float3 lms = Ap0D65To::Lms(Rgb);
+
+        //L'M'S'
+        return LmsTo::PqLms(lms);
+      }
+
+      //RGB AP0_D65->ICtCp
+      float3 Ictcp(float3 Rgb)
+      {
+        float3 lms = Ap0D65To::Lms(Rgb);
+
+        //ICtCp
+        return LmsTo::Ictcp(lms);
+      }
+    } //Ap0D65To
 
   } //ICtCp
+
+
+  namespace Jzazbz
+  {
+
+// https://doi.org/10.1364/OE.25.015131
+
+    static const float b  =   1.15f;
+    static const float g  =   0.66f;
+    static const float p  = 134.034375f; // 1.7 * 2523 / 2^5 (2523 / 2^5 = 2523 / 4096 * 128, which is the PQ constant m2)
+    static const float d  =  -0.56f;
+    static const float d0 =   0.000000000016295499671858948431690805591642856597900390625f; // 1.6295499532821566 * 10^-11
+
+    static const float bMinus1 =  0.15f;
+    static const float gMinus1 = -0.34f;
+
+    static const float dPlus1 = 0.44f;
+
+    static const float _1_div_p = 0.0074607725255191326141357421875f;
+
+    static const float3x3 NonLinearXYAndLinearZToJzazbzLms = float3x3(
+       0.41478972f, 0.579999f, 0.014648f,
+      -0.20151f,    1.120649f, 0.0531008f,
+      -0.0166008f,  0.2648f,   0.6684799f);
+
+    static const float3x3 JzazbzLmsToNonLinearXYAndLinearZ = float3x3(
+       1.92422640323638916015625f,    -1.00479233264923095703125f,  0.03765140473842620849609375f,
+       0.3503167629241943359375f,      0.7264811992645263671875f,  -0.065384425222873687744140625f,
+      -0.09098280966281890869140625f, -0.31272828578948974609375f,  1.522766590118408203125f);
+
+    static const float3x3 PqJzazbzLmsToIzazbz = float3x3(
+      0.5f,       0.5f,       0.f,
+      3.524f,    -4.066708f,  0.542708f,
+      0.199076f,  1.096799f, -1.295875f);
+
+    static const float3x3 IzazbzToPqJzazbzLms = float3x3(
+      1.f,  0.13860504329204559326171875f,   0.058047316968441009521484375f,
+      1.f, -0.13860504329204559326171875f,  -0.058047316968441009521484375f,
+      1.f, -0.096019245684146881103515625f, -0.81189191341400146484375f);
+
+    namespace XYZTo
+    {
+      //XYZ->X'Y'Z
+      float3 NonLinearXYAndLinearZ(float3 XYZ)
+      {
+        float2 val0 = float2(b * XYZ.x,
+                             g * XYZ.y);
+
+        float2 val1 = float2(bMinus1 * XYZ.z,
+                             gMinus1 * XYZ.x);
+
+        return float3(val0 - val1, XYZ.z);
+      }
+    } //XYZTo
+
+    namespace NonLinearXYAndLinearZTo
+    {
+      //X'Y'Z->XYZ
+      float3 XYZ(float3 NonLinearXYAndLinearZ)
+      {
+        float X = (NonLinearXYAndLinearZ.x + (bMinus1 * NonLinearXYAndLinearZ.z))
+                / b;
+
+        float Y = (NonLinearXYAndLinearZ.y + (gMinus1 * X))
+                / g;
+
+        return float3(X, Y, NonLinearXYAndLinearZ.z);
+      }
+
+      //X'Y'Z->LMS (Jzazbz variant)
+      float3 JzazbzLms(float3 NonLinearXYAndLinearZ)
+      {
+        return mul(NonLinearXYAndLinearZToJzazbzLms, NonLinearXYAndLinearZ);
+      }
+    } //NonLinearXYAndLinearZTo
+
+    namespace JzazbzLmsTo
+    {
+      //LMS (Jzazbz variant)->X'Y'Z
+      float3 NonLinearXYAndLinearZ(float3 JzazbzLms)
+      {
+        return mul(JzazbzLmsToNonLinearXYAndLinearZ, JzazbzLms);
+      }
+
+      //LMS (Jzazbz variant)->L'M'S' (Jzazbz variant)
+      float3 PqJzazbzLms(float3 JzazbzLms)
+      {
+        float3 powJzazbzLms = pow(JzazbzLms, PQ_m1);
+
+        float3 numerator    = PQ_c1 + PQ_c2 * powJzazbzLms;
+
+        float3 denominator  = 1.f   + PQ_c3 * powJzazbzLms;
+
+        return pow(numerator / denominator, p);
+      }
+    } //JzazbzLmsTo
+
+    namespace PqJzazbzLmsTo
+    {
+      //L'M'S' (Jzazbz variant)->Izazbz
+      float3 Izazbz(float3 PqJzazbzLms)
+      {
+        return mul(PqJzazbzLmsToIzazbz, PqJzazbzLms);
+      }
+
+      //L'M'S' (Jzazbz variant)->LMS (Jzazbz variant)
+      float3 JzazbzLms(float3 PqJzazbzLms)
+      {
+        float3 powPqJzazbzLms = pow(PqJzazbzLms, _1_div_p);
+
+        float3 numerator      = PQ_c1 - powPqJzazbzLms;
+
+        float3 denominator    = PQ_c3 * powPqJzazbzLms - PQ_c2;
+
+        return pow(numerator / denominator, _1_div_PQ_m1);
+      }
+    } //PqJzazbzLmsTo
+
+    namespace IzazbzTo
+    {
+      //Izazbz->Jzazbz
+      float3 Jzazbz(float3 Izazbz)
+      {
+        float numerator   = dPlus1 * Izazbz.x;
+
+        float denominator = 1.f + (d * Izazbz.x);
+
+        float Jz = (numerator / denominator) - d0;
+
+        return float3(Jz, Izazbz.yz);
+      }
+
+      //Izazbz->L'M'S' (Jzazbz variant)
+      float3 PqJzazbzLms(float3 Izazbz)
+      {
+        return mul(IzazbzToPqJzazbzLms, Izazbz);
+      }
+    } //IzazbzTo
+
+    namespace JzazbzTo
+    {
+      //Jzazbz->Izazbz
+      float3 Izazbz(float3 Jzazbz)
+      {
+        float numerator   = Jzazbz.x + d0;
+
+        float denominator = dPlus1 - (d * (Jzazbz.x + d0));
+
+        float Iz = numerator / denominator;
+
+        return float3(Iz, Jzazbz.yz);
+      }
+    } //JzazbzTo
+
+    namespace XYZTo
+    {
+      //XYZ->Jzazbz
+      float3 Jzazbz(float3 XYZ)
+      {
+        float3 NonLinearXYAndLinearZ = XYZTo::NonLinearXYAndLinearZ(XYZ);
+
+        float3 JzazbzLms             = NonLinearXYAndLinearZTo::JzazbzLms(NonLinearXYAndLinearZ);
+
+        float3 PqJzazbzLms           = JzazbzLmsTo::PqJzazbzLms(JzazbzLms);
+
+        float3 Izazbz                = PqJzazbzLmsTo::Izazbz(PqJzazbzLms);
+
+        //Jzazbz
+        return IzazbzTo::Jzazbz(Izazbz);
+      }
+    } //XYZTo
+
+    namespace JzazbzTo
+    {
+      //Jzazbz->XYZ
+      float3 XYZ(float3 Jzazbz)
+      {
+        float3 Izazbz                = JzazbzTo::Izazbz(Jzazbz);
+
+        float3 PqJzazbzLms           = IzazbzTo::PqJzazbzLms(Izazbz);
+
+        float3 JzazbzLms             = PqJzazbzLmsTo::JzazbzLms(PqJzazbzLms);
+
+        float3 NonLinearXYAndLinearZ = JzazbzLmsTo::NonLinearXYAndLinearZ(JzazbzLms);
+
+        //XYZ
+        return NonLinearXYAndLinearZTo::XYZ(NonLinearXYAndLinearZ);
+      }
+    } //JzazbzTo
+
+    namespace Bt709To
+    {
+      //RGB BT.709->Jzazbz
+      float3 Jzazbz(float3 Rgb)
+      {
+        float3 XYZ = Csp::Mat::Bt709To::XYZ(Rgb);
+
+        //Jzazbz
+        return XYZTo::Jzazbz(XYZ);
+      }
+    } //Bt709To
+
+    namespace DciP3To
+    {
+      //RGB DCI-P3->Jzazbz
+      float3 Jzazbz(float3 Rgb)
+      {
+        float3 XYZ = Csp::Mat::DciP3To::XYZ(Rgb);
+
+        //Jzazbz
+        return XYZTo::Jzazbz(XYZ);
+      }
+    } //DciP3To
+
+    namespace Bt2020To
+    {
+      //RGB BT.2020->Jzazbz
+      float3 Jzazbz(float3 Rgb)
+      {
+        float3 XYZ = Csp::Mat::Bt2020To::XYZ(Rgb);
+
+        //Jzazbz
+        return XYZTo::Jzazbz(XYZ);
+      }
+    } //Bt2020To
+
+    namespace JzazbzTo
+    {
+      //Jzazbz->RGB BT.709
+      float3 Bt709(float3 Jzazbz)
+      {
+        float3 XYZ = JzazbzTo::XYZ(Jzazbz);
+
+        //RGB BT.709
+        return Csp::Mat::XYZTo::Bt709(XYZ);
+      }
+
+      //Jzazbz->RGB DCI-P3
+      float3 DciP3(float3 Jzazbz)
+      {
+        float3 XYZ = JzazbzTo::XYZ(Jzazbz);
+
+        //RGB DCI-P3
+        return Csp::Mat::XYZTo::DciP3(XYZ);
+      }
+
+      //Jzazbz->RGB BT.2020
+      float3 Bt2020(float3 Jzazbz)
+      {
+        float3 XYZ = JzazbzTo::XYZ(Jzazbz);
+
+        //RGB BT.2020
+        return Csp::Mat::XYZTo::Bt2020(XYZ);
+      }
+    } //JzazbzTo
+
+  }
+
+
+  namespace OkLab
+  {
+
+//  Copyright (c) 2021 Björn Ottosson
+//
+//  Permission is hereby granted, free of charge, to any person obtaining a copy of
+//  this software and associated documentation files (the "Software"), to deal in
+//  the Software without restriction, including without limitation the rights to
+//  use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+//  of the Software, and to permit persons to whom the Software is furnished to do
+//  so, subject to the following conditions:
+//
+//  The above copyright notice and this permission notice shall be included in all
+//  copies or substantial portions of the Software.
+//
+//  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+//  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+//  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+//  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+//  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+//  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+//  SOFTWARE.
+
+    //RGB BT.709->OKLMS
+    #define Bt709ToOkLms float3x3( \
+      asfloat(0x3ed2e753), asfloat(0x3f095229), asfloat(0x3d528e15), \
+      asfloat(0x3e58dc50), asfloat(0x3f2e4ed6), asfloat(0x3ddbcdc4), \
+      asfloat(0x3db4d16f), asfloat(0x3e905888), asfloat(0x3f213db6))
+
+    //RGB BT.2020->OKLMS
+    #define Bt2020ToOkLms float3x3( \
+      asfloat(0x3f1dd1c2), asfloat(0x3eb86f63), asfloat(0x3cbca825), \
+      asfloat(0x3e87b4d1), asfloat(0x3f22cf19), asfloat(0x3dcab10c), \
+      asfloat(0x3dcd0a32), asfloat(0x3e50f045), asfloat(0x3f3226d0))
+
+    //OKL'M'S'->OKLab
+    #define G3OkLmsToOkLab float3x3 ( \
+      0.2104542553f,  0.7936177850f, -0.0040720468f, \
+      1.9779984951f, -2.4285922050f,  0.4505937099f, \
+      0.0259040371f,  0.7827717662f, -0.8086757660f)
+
+    //OKLab->OKL'M'S'
+    #define OkLabToG3OkLms float3x3 ( \
+      1.f,  0.3963377774f,  0.2158037573f, \
+      1.f, -0.1055613458f, -0.0638541728f, \
+      1.f, -0.0894841775f, -1.2914855480f)
+
+    //OKLMS->RGB BT.709
+    #define OkLmsToBt709 float3x3 ( \
+      asfloat(0x40828d05), asfloat(0xc053d1ae), asfloat(0x3e6c8bde), \
+      asfloat(0xbfa2562d), asfloat(0x4026fa47), asfloat(0xbeaea0a2), \
+      asfloat(0xbb899b59), asfloat(0xbf3431b1), asfloat(0x3fda9ebe))
+
+    //OKLMS->RGB BT.2020
+    #define OkLmsToBt2020 float3x3 ( \
+      asfloat(0x400903cf), asfloat(0xbf9f9647), asfloat(0x3dda0b93), \
+      asfloat(0xbf6279cc), asfloat(0x400a6af4), asfloat(0xbe8e7ec1), \
+      asfloat(0xbd471993), asfloat(0xbee8d6fc), asfloat(0x3fc06aec))
+
+
+// provided matrices
+//
+//    //RGB BT.709->OKLMS
+//    #define  Bt709ToOkLms = float3x3(
+//      0.4122214708f, 0.5363325363f, 0.0514459929f, \
+//      0.2119034982f, 0.6806995451f, 0.1073969566f, \
+//      0.0883024619f, 0.2817188376f, 0.6299787005f) \
+//
+//    //OKLMS->RGB BT.709
+//    #define OkLmsToBt709 float3x3 ( \
+//       4.0767416621f, -3.3077115913f,  0.2309699292f, \
+//      -1.2684380046f,  2.6097574011f, -0.3413193965f, \
+//      -0.0041960863f, -0.7034186147f,  1.7076147010f) \
+
+    namespace OkLmsTo
+    {
+
+      //OKLMS->OKL'M'S'
+      float3 G3OkLms(float3 Lms)
+      {
+        //apply gamma 3
+        return sign(Lms) * pow(abs(Lms), 1.f / 3.f);
+      }
+
+    } //OkLmsTo
+
+    namespace G3OkLmsTo
+    {
+
+      //OKL'M'S'->OKLab
+      float3 OkLab(float3 G3Lms)
+      {
+        return mul(G3OkLmsToOkLab, G3Lms);
+      }
+
+      //OKL'M'S'->OKLMS
+      float3 OkLms(float3 G3Lms)
+      {
+        //remove gamma 3
+        return G3Lms * G3Lms * G3Lms;
+      }
+
+    } //G3OkLmsTo
+
+    namespace OkLabTo
+    {
+
+      //OKLab->OKL'M'S'
+      float3 G3OkLms(float3 Lab)
+      {
+        return mul(OkLabToG3OkLms, Lab);
+      }
+
+    } //OkLabTo
+
+    namespace Bt709To
+    {
+
+      //RGB BT.709->OKLab
+      float3 OkLab(float3 Rgb)
+      {
+        //to OKLMS
+        float3 OkLms = mul(Bt709ToOkLms, Rgb);
+
+        //to OKL'M'S'
+        //apply gamma 3
+        float3 g3OkLms = Csp::OkLab::OkLmsTo::G3OkLms(OkLms);
+
+        //to OKLab
+        return Csp::OkLab::G3OkLmsTo::OkLab(g3OkLms);
+      }
+
+    } //Bt709To
+
+    namespace Bt2020To
+    {
+
+      //RGB BT.2020->OKLab
+      float3 OkLab(float3 Rgb)
+      {
+        //to OKLMS
+        float3 OkLms = mul(Bt2020ToOkLms, Rgb);
+
+        //to OKL'M'S'
+        //apply gamma 3
+        float3 g3OkLms = Csp::OkLab::OkLmsTo::G3OkLms(OkLms);
+
+        //to OKLab
+        return Csp::OkLab::G3OkLmsTo::OkLab(g3OkLms);
+      }
+
+    } //Bt2020To
+
+    namespace OkLabTo
+    {
+
+      //OKLab->RGB BT.709
+      float3 Bt709(float3 Lab)
+      {
+        //to OKL'M'S'
+        float3 g3OkLms = mul(OkLabToG3OkLms, Lab);
+
+        //to OKLMS
+        //remove gamma 3
+        float3 okLms = Csp::OkLab::G3OkLmsTo::OkLms(g3OkLms);
+
+        //to RGB BT.709
+        return mul(OkLmsToBt709, okLms);
+      }
+
+      //OKLab->RGB BT.2020
+      float3 Bt2020(float3 Lab)
+      {
+        //to OKL'M'S'
+        float3 g3OkLms = mul(OkLabToG3OkLms, Lab);
+
+        //to OKLMS
+        //remove gamma 3
+        float3 okLms = Csp::OkLab::G3OkLmsTo::OkLms(g3OkLms);
+
+        //to RGB BT.2020
+        return mul(OkLmsToBt2020, okLms);
+      }
+
+    } //OkLabTo
+
+
+    // Finds the maximum saturation possible for a given hue that fits in sRGB
+    // Saturation here is defined as S = C/L
+    // a and b must be normalized so a^2 + b^2 == 1
+    float ComputeMaxSaturation(float2 ab)
+    {
+      // Max saturation will be when one of r, g or b goes below zero.
+
+      // Select different coefficients depending on which component goes below zero first
+      float k0, k1, k2, k3, k4;
+
+      float3 wLms;
+
+      if (-1.88170328f * ab.x - 0.80936493f * ab.y > 1)
+      {
+        // Red component
+        k0 = 1.19086277f;
+        k1 = 1.76576728f;
+        k2 = 0.59662641f;
+        k3 = 0.75515197f;
+        k4 = 0.56771245f;
+
+        wLms.rgb = OkLmsToBt709[0].rgb;
+      }
+      else if (1.81444104f * ab.x - 1.19445276f * ab.y > 1)
+      {
+        // Green component
+        k0 =  0.73956515f;
+        k1 = -0.45954404f;
+        k2 =  0.08285427f;
+        k3 =  0.12541070f;
+        k4 =  0.14503204f;
+
+        wLms.rgb = OkLmsToBt709[1].rgb;
+      }
+      else
+      {
+        // Blue component
+        k0 =  1.35733652f;
+        k1 = -0.00915799f;
+        k2 = -1.15130210f;
+        k3 = -0.50559606f;
+        k4 =  0.00692167f;
+
+        wLms.rgb = OkLmsToBt709[2].rgb;
+      }
+
+      // Approximate max saturation using a polynomial:
+      float s = k0
+              + k1 * ab.x
+              + k2 * ab.y
+              + k3 * ab.x * ab.x
+              + k4 * ab.x * ab.y;
+
+      // Do one step Halley's method to get closer
+      // this gives an error less than 10e6, except for some blue hues where the dS/dh is close to infinite
+      // this should be sufficient for most applications, otherwise do two/three steps
+
+      float3 kLms = mul(OkLabToG3OkLms, float3(0.f, ab));
+
+      {
+        float3 g3Lms = 1.f + s * kLms;
+
+        float3 intermediateLms = g3Lms * g3Lms;
+
+        float3 lms = intermediateLms * g3Lms;
+
+        float3 g3LmsdS  = 3.f * kLms * intermediateLms;
+        float3 g3LmsdS2 = 6.f * kLms * kLms * g3Lms;
+
+        float3 f = mul(float3x3(lms,
+                                g3LmsdS,
+                                g3LmsdS2), wLms);
+
+        s = s
+          - f.x * f.y
+          / (f.y * f.y - 0.5f * f.x * f.z);
+      }
+
+      return s;
+    }
+
+    // finds L_cusp and C_cusp for a given hue
+    // a and b must be normalized so a^2 + b^2 == 1
+    float2 FindCusp(float2 ab)
+    {
+      // First, find the maximum saturation (saturation S = C/L)
+      float sCusp = ComputeMaxSaturation(ab);
+
+      float2 lcCusp;
+
+      // Convert to linear sRGB to find the first point where at least one of r, g or b >= 1:
+      float3 rgbAtMax = Csp::OkLab::OkLabTo::Bt709(float3(1.f, sCusp * ab));
+
+      lcCusp.x = pow(1.f / max(max(rgbAtMax.r, rgbAtMax.g), rgbAtMax.b), 1.f / 3.f);
+      lcCusp.y = lcCusp.x * sCusp;
+
+      return lcCusp;
+    }
+
+    float2 ToSt(float2 LC)
+    {
+      return LC.y / float2(LC.x,
+                           1.f - LC.x);
+    }
+
+    static const float ToeK1 = 0.206f;
+    static const float ToeK2 = 0.03f;
+    static const float ToeK3 = (1.f + ToeK1) / (1.f + ToeK2);
+
+    // toe function for L_r
+    float Toe(float X)
+    {
+      float i0 = ToeK3 * X - ToeK1;
+      return 0.5f * (i0 + sqrt(i0 * i0 + 4.f * ToeK2 * ToeK3 * X));
+    }
+
+    // inverse toe function for L_r
+    float ToeInv(float X)
+    {
+      return (X * X     + ToeK1 * X)
+           / (X * ToeK3 + ToeK2 * ToeK3);
+    }
+
+    float2 GetStMid(float2 ab)
+    {
+
+      float s = 0.11516993f
+              + 1.f / (7.44778970f
+                     + 4.15901240f * ab.y
+                     + ab.x * (-2.19557347f
+                              + 1.75198401f * ab.y
+                              + ab.x * (-2.13704948f
+                                      - 10.02301043f * ab.y
+                                      + ab.x * (-4.24894561f
+                                               + 5.38770819f * ab.y
+                                               + 4.69891013f * ab.x))));
+
+      float t = 0.11239642f
+              + 1.f / (1.61320320f
+                     - 0.68124379f * ab.y
+                     + ab.x * (0.40370612f
+                             + 0.90148123f * ab.y
+                             + ab.x * (-0.27087943f
+                                      + 0.61223990f * ab.y
+                                      + ab.x * (0.00299215f
+                                              - 0.45399568f * ab.y
+                                              - 0.14661872f * ab.x))));
+
+      return float2(s, t);
+    }
+
+    float FindGamutIntersection(
+      float2 ab,
+      float  L1,
+      float  C1,
+      float  L0,
+      float2 cusp)
+    {
+      // Find the intersection for upper and lower half seprately
+      float t;
+
+      if (((L1 - L0) * cusp.y - (cusp.x - L0) * C1) <= 0.f)
+      {
+        // Lower half
+        t = cusp.y * L0 / (C1 * cusp.x + cusp.y * (L0 - L1));
+      }
+      else
+      {
+        // Upper half
+        // First intersect with triangle
+        t = cusp.y * (L0 - 1.f) / (C1 * (cusp.x - 1.f) + cusp.y * (L0 - L1));
+
+        // Then one step Halley's method
+        {
+          float dL = L1 - L0;
+          float dC = C1;
+
+          float3 kLms = mul(OkLabToG3OkLms, float3(0.f, ab));
+
+          float3 g3LmsDt = dL + dC * kLms;
+
+          // If higher accuracy is required, 2 or 3 iterations of the following block can be used:
+          {
+            float L = L0 * (1.f - t) + t * L1;
+            float C = t * C1;
+
+            float3 g3Lms = L + C * kLms;
+
+            float3 intermediateLms = g3Lms * g3Lms;
+
+            float3 lms = g3Lms * intermediateLms;
+
+            float3 lmsDt  = 3.f * g3LmsDt * intermediateLms;
+            float3 lmsDt2 = 6.f * g3LmsDt * g3LmsDt * g3Lms;
+
+            static const float3x3 iLms = float3x3(lms.xyz,
+                                                  lmsDt.xyz,
+                                                  lmsDt2.xyz);
+
+            static const float3 ir = OkLmsToBt709[0].rgb;
+
+            static const float3 ig = OkLmsToBt709[1].rgb;
+
+            static const float3 ib = OkLmsToBt709[2].rgb;
+
+            float3 r = mul(iLms, ir);
+
+            r.x -= 1.f;
+
+            float u_r = r.y / (r.y * r.y - 0.5f * r.x * r.z);
+            float t_r = -r.x * u_r;
+
+            float3 g = mul(iLms, ig);
+
+            g.x -= 1.f;
+
+            float u_g = g.y / (g.y * g.y - 0.5f * g.x * g.z);
+            float t_g = -g.x * u_g;
+
+            float3 b = mul(iLms, ib);
+
+            b.x -= 1.f;
+
+            float u_b = b.y / (b.y * b.y - 0.5f * b.x * b.z);
+            float t_b = -b.x * u_b;
+
+            t_r = u_r >= 0.f ? t_r : FP32_MAX;
+            t_g = u_g >= 0.f ? t_g : FP32_MAX;
+            t_b = u_b >= 0.f ? t_b : FP32_MAX;
+
+            t += min(t_r, min(t_g, t_b));
+          }
+        }
+      }
+
+      return t;
+    }
+
+    float3 GetCs(float3 Lab)
+    {
+      float2 cusp = FindCusp(Lab.yz);
+
+      float   C_max = FindGamutIntersection(Lab.yz, Lab.x, 1.f, Lab.x, cusp);
+      float2 ST_max = ToSt(cusp);
+
+      // Scale factor to compensate for the curved part of gamut shape:
+      float k = C_max / min((Lab.x * ST_max.x),
+                            (1.f - Lab.x) * ST_max.y);
+
+      float C_mid;
+      {
+        float2 ST_mid = GetStMid(Lab.yz);
+
+        // Use a soft minimum function, instead of a sharp triangle shape to get a smooth value for chroma.
+        float2 C_ab = Lab.x * ST_mid;
+
+        C_ab.y = ST_mid.y - C_ab.y;
+
+        C_mid = 0.9f * k * sqrt(sqrt(1.f
+                                   / (1.f / (C_ab.x * C_ab.x * C_ab.x * C_ab.x)
+                                    + 1.f / (C_ab.y * C_ab.y * C_ab.y * C_ab.y))));
+      }
+
+      float C_0;
+      {
+        // for C_0, the shape is independent of hue, so ST are constant. Values picked to roughly be the average values of ST.
+        float C_a = Lab.x * 0.4f;
+        float C_b = (1.f - Lab.x) * 0.8f;
+
+        // Use a soft minimum function, instead of a sharp triangle shape to get a smooth value for chroma.
+        C_0 = sqrt(1.f
+                 / (1.f / (C_a * C_a)
+                  + 1.f / (C_b * C_b)));
+      }
+
+      return float3(C_0, C_mid, C_max);
+    }
+
+    namespace OkLabTo
+    {
+
+      //OKLab->OKHSV
+      float3 OkHsv(float3 Lab)
+      {
+        float2 LC;
+
+        LC.x = Lab.x;
+        LC.y = sqrt(Lab.y * Lab.y
+                  + Lab.z * Lab.z);
+
+        float2 ab = Lab.yz / LC.y;
+
+        float3 hsv;
+
+        hsv.x = 0.5f + 0.5f * atan2(-Lab.z, -Lab.y) / PI;
+
+        float2 cusp = Csp::OkLab::FindCusp(ab);
+
+        float2 stMax = Csp::OkLab::ToSt(cusp);
+
+        float s0 = 0.5f;
+        float k = 1.f - s0 / stMax.x;
+
+        // first we find L_v, C_v, L_vt and C_vt
+
+        float t = stMax.y / (LC.y + LC.x * stMax.y);
+        float2 LC_v = LC * t;
+
+        float L_vt = ToeInv(LC_v.x);
+        float C_vt = LC_v.y * L_vt / LC_v.x;
+
+        // we can then use these to invert the step that compensates for the toe and the curved top part of the triangle:
+        float3 rgbScale = Csp::OkLab::OkLabTo::Bt709(float3(L_vt,
+                                                            ab * C_vt));
+
+        float scaleL = pow(1.f / max(max(rgbScale.r, rgbScale.g), max(rgbScale.b, 0.f)), 1.f / 3.f);
+
+        LC /= scaleL;
+
+        float toeL = Toe(LC.x);
+
+        LC.y = LC.y * toeL / LC.x;
+        LC.x = toeL;
+
+        // we can now compute v and s:
+
+        hsv.z = LC.x / LC_v.x;
+        hsv.y = (s0 + stMax.y) * LC_v.y / ((stMax.y * s0) + stMax.y * k * LC_v.y);
+
+        return hsv;
+      }
+
+      //OKLab->OKHSL
+      float3 OkHsl(float3 Lab)
+      {
+        float C;
+
+        float2 ab = Lab.yz;
+
+        C = sqrt(Lab.y * Lab.y
+               + Lab.z * Lab.z);
+
+        ab /= C;
+
+        float3 hsl;
+
+        hsl.x = 0.5f + 0.5f * atan2(-Lab.z, -Lab.y) / PI;
+
+        float3 cs = GetCs(float3(Lab.x, ab));
+
+        float C_0   = cs.x;
+        float C_mid = cs.y;
+        float C_max = cs.z;
+
+        // Inverse of the interpolation in okhsl_to_srgb:
+        float mid    = 0.8f;
+        float midInv = 1.25f;
+
+        float s;
+        if (C < C_mid)
+        {
+          float k1 = mid * C_0;
+
+          float k2 = 1.f
+                   - k1 / C_mid;
+
+          float t = C
+                  / (k1 + k2 * C);
+
+          hsl.y = t * mid;
+        }
+        else
+        {
+          float k0 = C_mid;
+
+          float k1 = (1.f - mid)
+                   * C_mid * C_mid
+                   * midInv * midInv / C_0;
+
+          float k2 = 1.f
+                   - k1 / (C_max - C_mid);
+
+          float t = (C - k0) / (k1 + k2 * (C - k0));
+
+          hsl.y = mid + (1.f - mid) * t;
+        }
+
+        hsl.z = Csp::OkLab::Toe(Lab.x);
+
+        return hsl;
+      }
+
+    }
+
+    namespace Bt709To
+    {
+
+      //RGB BT.709->OKHSV
+      float3 OkHsv(float3 Rgb)
+      {
+        float3 lab = Csp::OkLab::Bt709To::OkLab(Rgb);
+
+        return Csp::OkLab::OkLabTo::OkHsv(lab);
+      }
+
+      //RGB BT.709->OKHSL
+      float3 OkHsl(float3 Rgb)
+      {
+        float3 lab = Csp::OkLab::Bt709To::OkLab(Rgb);
+
+        return Csp::OkLab::OkLabTo::OkHsl(lab);
+      }
+
+    } //Bt709To
+
+    namespace Bt2020To
+    {
+
+      //RGB BT.2020->OKHSV
+      float3 OkHsv(float3 Rgb)
+      {
+        float3 lab = Csp::OkLab::Bt2020To::OkLab(Rgb);
+
+        return Csp::OkLab::OkLabTo::OkHsv(lab);
+      }
+
+      //RGB BT.2020->OKHSL
+      float3 OkHsl(float3 Rgb)
+      {
+        float3 lab = Csp::OkLab::Bt2020To::OkLab(Rgb);
+
+        return Csp::OkLab::OkLabTo::OkHsl(lab);
+      }
+
+    } //Bt2020To
+
+    namespace OkHsvTo
+    {
+      //OKHSV->OKLab
+      float3 OkLab(float3 Hsv)
+      {
+        float i_ab = 2.f * PI * Hsv.x;
+
+        float2 ab = float2(cos(i_ab),
+                           sin(i_ab));
+
+        float2 cusp = Csp::OkLab::FindCusp(ab);
+
+        float2 stMax = Csp::OkLab::ToSt(cusp);
+
+        float s0 = 0.5f;
+        float k = 1.f - s0 / stMax.x;
+
+        // first we compute L and V as if the gamut is a perfect triangle:
+
+        // L, C when v==1:
+        float i_num = Hsv.y * s0;
+        float i_den = s0 + stMax.y - stMax.y * k * Hsv.y;
+
+        float i_div = i_num / i_den;
+
+        float L_v =     1.f - i_div;
+        float C_v = stMax.y * i_div;
+
+        float2 LC = float2(L_v, C_v) * Hsv.z;
+
+        // then we compensate for both toe and the curved top part of the triangle:
+        float L_vt = Csp::OkLab::ToeInv(L_v);
+        float C_vt = C_v * L_vt / L_v;
+
+        float L_new = Csp::OkLab::ToeInv(LC.x);
+
+        LC.y = LC.y * L_new / LC.x;
+        LC.x = L_new;
+
+        float3 rgbScale = Csp::OkLab::OkLabTo::Bt709(float3(L_vt,
+                                                            ab * C_vt));
+
+        float scaleL = pow(1.f / max(max(rgbScale.r, rgbScale.g), max(rgbScale.b, 0.f)), 1.f / 3.f);
+
+        LC *= scaleL;
+
+        return float3(LC.x,
+                      ab * LC.y);
+      }
+
+      //OKHSV->BT.709
+      float3 Bt709(float3 Hsv)
+      {
+        float3 lab = Csp::OkLab::OkHsvTo::OkLab(Hsv);
+
+        return Csp::OkLab::OkLabTo::Bt709(lab);
+      }
+
+      //OKHSV->BT.2020
+      float3 Bt2020(float3 Hsv)
+      {
+        float3 lab = Csp::OkLab::OkHsvTo::OkLab(Hsv);
+
+        return Csp::OkLab::OkLabTo::Bt2020(lab);
+      }
+    } //OkHsvTo
+
+    namespace OkHslTo
+    {
+      //OKHSL->OKLab
+      float3 OkLab(float3 Hsl)
+      {
+        if (Hsl.z == 1.f)
+        {
+          return 1.f;
+        }
+        else if (Hsl.z == 0.f)
+        {
+          return 0.f;
+        }
+
+        float  L;
+        float2 ab;
+
+        float i_ab = 2.f * PI * Hsl.x;
+
+        L = Csp::OkLab::ToeInv(Hsl.z);
+        ab = float2(cos(i_ab),
+                    sin(i_ab));
+
+        float3 cs = Csp::OkLab::GetCs(float3(L, ab));
+
+        float C_0   = cs.x;
+        float C_mid = cs.y;
+        float C_max = cs.z;
+
+        // Interpolate the three values for C so that:
+        // At s=0: dC/ds = C_0, C=0
+        // At s=0.8: C=C_mid
+        // At s=1.0: C=C_max
+
+        float mid    = 0.8f;
+        float midInv = 1.25f;
+
+        float C,
+              t,
+              k0,
+              k1,
+              k2;
+
+        if (Hsl.y < mid)
+        {
+          t = midInv * Hsl.y;
+
+          k1 = mid * C_0;
+          k2 = 1.f
+             - k1 / C_mid;
+
+          C = t * k1 / (1.f - k2 * t);
+        }
+        else
+        {
+          float i0 = 1.f - mid;
+
+          t = (Hsl.y - mid) / i0;
+
+          k0 = C_mid;
+
+          k1 = i0
+             * C_mid * C_mid
+             * midInv * midInv
+             / C_0;
+
+          k2 = 1.f
+             - k1 / (C_max - C_mid);
+
+          C = k0
+            + t * k1
+            / (1.f - k2 * t);
+        }
+
+        return float3(L,
+                      ab * C);
+      }
+
+      //OKHSL->BT.709
+      float3 Bt709(float3 Hsl)
+      {
+        float3 lab = Csp::OkLab::OkHslTo::OkLab(Hsl);
+
+        return Csp::OkLab::OkLabTo::Bt709(lab);
+      }
+
+      //OKHSL->BT.2020
+      float3 Bt2020(float3 Hsl)
+      {
+        float3 lab = Csp::OkLab::OkHslTo::OkLab(Hsl);
+
+        return Csp::OkLab::OkLabTo::Bt2020(lab);
+      }
+    } //OkHslTo
+
+  } //OkLab
 
 
   namespace Map
@@ -1373,24 +2689,32 @@ namespace Csp
     namespace Bt709Into
     {
 
-      float3 Scrgb(float3 Input)
+      float3 Scrgb(
+        const float3 Colour,
+        const float  Brightness)
       {
-        return Input / 80.f;
+        return Colour / 80.f * Brightness;
       }
 
-      float3 Hdr10(float3 Input)
+      float3 Hdr10(
+        const float3 Colour,
+        const float  Brightness)
       {
-        return Csp::Trc::NitsTo::Pq(Csp::Mat::Bt709To::Bt2020(Input));
+        return Csp::Trc::NitsTo::Pq(Csp::Mat::Bt709To::Bt2020(Colour) * Brightness);
       }
 
-      float3 Hlg(float3 Input)
+      float3 Hlg(
+        const float3 Colour,
+        const float  Brightness)
       {
-        return Csp::Trc::NitsTo::Hlg(Csp::Mat::Bt709To::Bt2020(Input));
+        return Csp::Trc::NitsTo::Hlg(Csp::Mat::Bt709To::Bt2020(Colour) * Brightness);
       }
 
-      float3 Ps5(float3 Input)
+      float3 Ps5(
+        const float3 Colour,
+        const float  Brightness)
       {
-        return Csp::Mat::Bt709To::Bt2020(Input / 100.f);
+        return Csp::Mat::Bt709To::Bt2020(Colour / 100.f) * Brightness;
       }
 
     } //Bt709Into
@@ -1435,74 +2759,48 @@ float3 GetXYZfromxyY(Sxy xy, float Y)
   return XYZ;
 }
 
-
-//static const float3x3 IDENTITY =
-//  float3x3(1.f, 0.f, 0.f,
-//           0.f, 1.f, 0.f,
-//           0.f, 0.f, 1.f);
-//
-//struct colourspace
-//{
-//  bool     can_ycbcr;
-//
-//  float3   k;
-//  float    kb_helper;
-//  float    kr_helper;
-//  float2   kg_helper;
-//
-//  float3x3 to_xyz;
-//  float3x3 to_bt709;
-//  float3x3 to_dci_p3;
-//  float3x3 to_bt2020;
-//  float3x3 to_ap1;
-//  float3x3 to_ap1_d65;
-//  float3x3 to_ap0;
-//  float3x3 to_ap0_d65;
-//  float3x3 to_lms;
-//
-//  float3x3 from_xyz;
-//  float3x3 from_bt709;
-//  float3x3 from_dci_p3;
-//  float3x3 from_bt2020;
-//  float3x3 from_ap1;
-//  float3x3 from_ap1_d65;
-//  float3x3 from_ap0;
-//  float3x3 from_ap0_d65;
-//  float3x3 from_lms;
-//};
-
-/*
-default:
-struct colourspace
+float3 GetXYZfromxyY(float2 xy, float Y)
 {
-  can_ycbcr    = false;
+  float3 XYZ;
 
-  k            = float3(0.f, 0.f, 0.f);
-  kb_helper    = 0.f;
-  kr_helper    = 0.f;
-  kg_helper    = float2(0.f, 0.f);
+  XYZ.x = (xy.x / xy.y)
+        * Y;
 
-  to_xyz       = IDENTITY;
-  to_bt709     = IDENTITY;
-  to_dci_p3    = IDENTITY;
-  to_bt2020    = IDENTITY;
-  to_ap1       = IDENTITY;
-  to_ap1_d65   = IDENTITY;
-  to_ap0       = IDENTITY;
-  to_ap0_d65   = IDENTITY;
-  to_lms       = IDENTITY;
+  XYZ.y = Y;
 
-  from_xyz     = IDENTITY;
-  from_bt709   = IDENTITY;
-  from_dci_p3  = IDENTITY;
-  from_bt2020  = IDENTITY;
-  from_ap1     = IDENTITY;
-  from_ap1_d65 = IDENTITY;
-  from_ap0     = IDENTITY;
-  from_ap0_d65 = IDENTITY;
-  from_lms     = IDENTITY;
-};
-*/
+  XYZ.z = ((1.f - xy.x - xy.y) / xy.y)
+        * Y;
+
+  return XYZ;
+}
+
+
+#if (OVERWRITE_SDR_GAMMA == GAMMA_24)
+
+  #define ENCODE_SDR(COLOUR) \
+    pow(COLOUR, 1.f / 2.4f)
+
+  #define DECODE_SDR(COLOUR) \
+    pow(COLOUR, 2.4f)
+
+#elif (OVERWRITE_SDR_GAMMA == GAMMA_SRGB)
+
+  #define ENCODE_SDR(COLOUR) \
+    Csp::Trc::LinearTo::Srgb(COLOUR)
+
+  #define DECODE_SDR(COLOUR) \
+    Csp::Trc::SrgbTo::Linear(COLOUR)
+
+#else
+
+  #define ENCODE_SDR(COLOUR) \
+    pow(COLOUR, 1.f / 2.2f)
+
+  #define DECODE_SDR(COLOUR) \
+    pow(COLOUR, 2.2f)
+
+#endif
+
 
 //float posPow(float x, float y)
 //{
@@ -1548,202 +2846,6 @@ struct colourspace
 //
 //  return expandedColourInBT2020;
 //}
-
-//static const struct csp_bt709
-//{
-//  can_ycbcr    = true,
-//
-//  k            = float3(0.212636821677324, 0.715182981841251, 0.0721801964814255),
-//  kb_helper    = 1.85563960703715,
-//  kr_helper    = 1.57472635664535,
-//  kg_helper    = float2(0.187281345942859, 0.468194596334655),
-//
-//  to_xyz       = float3x3(0.412386563252992,  0.357591490920625, 0.180450491203564,
-//                          0.212636821677324,  0.715182981841251, 0.0721801964814255,
-//                          0.0193306201524840, 0.119197163640208, 0.950372587005435),
-//
-//  to_bt709     = IDENTITY,
-//
-//  to_dci_p3    = float3x3(0.822457548511777,  0.177542451488222,  0.000000000000000,
-//                          0.0331932273885255, 0.966806772611475,  0.000000000000000,
-//                          0.0170850449332782, 0.0724098641777013, 0.910505090889021),
-//
-//  to_bt2020    = float3x3(0.627401924722236,  0.329291971755002,  0.0433061035227622,
-//                          0.0690954897392608, 0.919544281267395,  0.0113602289933443,
-//                          0.0163937090881632, 0.0880281623979006, 0.895578128513936),
-//
-//  to_ap1       = IDENTITY,
-//  to_ap1_d65   = IDENTITY,
-//  to_ap0       = IDENTITY,
-//
-//  to_ap0_d65   = float3x3(0.433939666226453,  0.376270757528954, 0.189789576244594,
-//                          0.0886176490106605, 0.809293012830817, 0.102089338158523,
-//                          0.0177524231517299, 0.109465628662465, 0.872781948185805),
-//
-//  to_lms       = IDENTITY,
-//
-//
-//  from_xyz     = float3x3( 3.24100323297636,   -1.53739896948879,  -0.498615881996363,
-//                          -0.969224252202516,   1.87592998369518,   0.0415542263400847,
-//                           0.0556394198519755, -0.204011206123910,  1.05714897718753),
-//
-//  from_bt2020  = float3x3( 1.66049621914783,   -0.587656444131135, -0.0728397750166941,
-//                          -0.124547095586012,   1.13289510924730,  -0.00834801366128445,
-//                          -0.0181536813870718, -0.100597371685743,  1.11875105307281),
-//
-//  from_ap0_d65 = float3x3( 2.55243581004094,   -1.12951938115888,  -0.422916428882053,
-//                          -0.277330603707685,   1.37823643460965,  -0.100905830901963,
-//                          -0.0171334337475196, -0.149886019090529,  1.16701945283805),
-//};
-//
-//
-//static const colourspace csp_dci_p3 =
-//{
-//  can_ycbcr    = false;
-//
-//  k            = float3(0.f, 0.f, 0.f);
-//  kb_helper    = 0.f;
-//  kr_helper    = 0.f;
-//  kg_helper    = float2(0.f, 0.f);
-//
-//  to_xyz       = IDENTITY;
-//  to_bt709     = IDENTITY;
-//  to_dci_p3    = IDENTITY;
-//  to_bt2020    = IDENTITY;
-//  to_ap1       = IDENTITY;
-//  to_ap1_d65   = IDENTITY;
-//  to_ap0       = IDENTITY;
-//  to_ap0_d65   = IDENTITY;
-//  to_lms       = IDENTITY;
-//
-//  from_xyz     = float3x3( 2.49350912393461,   -0.931388179404778,  -0.402712756741651,
-//                          -0.829473213929555,   1.76263057960030,    0.0236242371055886,
-//                           0.0358512644339181, -0.0761839369220759,  0.957029586694311);
-//};
-//
-//
-//static const colourspace csp_bt2020 =
-//{
-//  can_ycbcr    = true;
-//
-//  k            = float3(0.262698338956556, 0.678008765772817, 0.0592928952706273);
-//  kb_helper    = 1.88141420945875;
-//  kr_helper    = 1.47460332208689;
-//  kg_helper    = float2(0.164532527178987, 0.571343414550845);
-//
-//  to_xyz       = float3x3(0.636953506785074,    0.144619184669233,  0.168855853922873,
-//                          0.262698338956556,    0.678008765772817,  0.0592928952706273,
-//                          4.99407096644439e-17, 0.0280731358475570, 1.06082723495057);
-//
-//  to_bt709     = bt709.from_bt2020;
-//
-//  to_dci_p3    = IDENTITY;
-//  to_bt2020    = IDENTITY;
-//  to_ap1       = IDENTITY;
-//  to_ap1_d65   = IDENTITY;
-//  to_ap0       = IDENTITY;
-//
-//  to_ap0_d65   = float3x3(0.670246365605384,    0.152175527191681,  0.177578107202935,
-//                          0.0445008795878928,   0.854497444583291,  0.101001675828816,
-//                          4.58634334267322e-17, 0.0257811794360767, 0.974218820563924);
-//
-//  to_lms       = float3x3(0.412109375,    0.52392578125,  0.06396484375,
-//                          0.166748046875, 0.720458984375, 0.11279296875,
-//                          0.024169921875, 0.075439453125, 0.900390625);
-//
-//
-//  from_xyz     = float3x3( 1.71666342779588,   -0.355673319730140, -0.253368087890248,
-//                          -0.666673836198887,   1.61645573982470,   0.0157682970961337,
-//                           0.0176424817849772, -0.0427769763827532, 0.942243281018431);
-//
-//  from_bt709   = bt709.to_bt2020;
-//
-//  from_ap0_d65 = float3x3( 1.98120359851493,   -0.484110148394926,  -0.267481115328003,
-//                          -1.49600189517300,    2.20017241853874,    0.171935552888793,
-//                           0.0395893535231033, -0.0582241265671916,  0.861149547243843);
-//
-//  from_lms     = float3x3( 3.43660669433308,   -2.50645211865627,    0.0698454243231915,
-//                          -0.791329555598929,   1.98360045179229,   -0.192270896193362,
-//                          -0.0259498996905927, -0.0989137147117265,  1.12486361440232);
-//};
-//
-//
-//static const colourspace csp_ap1 =
-//{
-//  can_ycbcr    = false;
-//
-//  k            = float3(0.f, 0.f, 0.f);
-//  kb_helper    = 0.f;
-//  kr_helper    = 0.f;
-//  kg_helper    = float2(0.f, 0.f);
-//
-//
-//  from_xyz     = float3x3( 1.64102337969433,   -0.324803294184790,   -0.236424695237612,
-//                          -0.663662858722983,   1.61533159165734,     0.0167563476855301,
-//                           0.0117218943283754, -0.00828444199623741,  0.988394858539022);
-//};
-//
-//
-//static const colourspace csp_ap1_d65 =
-//{
-//  can_ycbcr    = false;
-//
-//  k            = float3(0.f, 0.f, 0.f);
-//  kb_helper    = 0.f;
-//  kr_helper    = 0.f;
-//  kg_helper    = float2(0.f, 0.f);
-//
-//
-//  from_xyz     = float3x3( 0.647502080944762,   0.134381221854532,   0.168545242577887,
-//                           0.266084305353177,   0.675978267510674,   0.0579374271361486,
-//                          -0.00544882536559402, 0.00407215823801611, 1.09027703792571);
-//};
-//
-//static const colourspace csp_ap0 =
-//{
-//  can_ycbcr    = false;
-//
-//  k            = float3(0.f, 0.f, 0.f);
-//  kb_helper    = 0.f;
-//  kr_helper    = 0.f;
-//  kg_helper    = float2(0.f, 0.f);
-//
-//
-//  from_xyz     = float3x3( 1.04981101749797,  0.000000000000000, -0.0000974845405792529,
-//                          -0.495903023077320, 1.37331304581571,   0.0982400360573100,
-//                           0.000000000000000, 0.000000000000000,  0.991252018200499);
-//};
-//
-//
-//static const colourspace csp_ap0_d65 =
-//{
-//  can_ycbcr    = true;
-//
-//  k            = float3(0.343163015452697, 0.734695029446046, -0.0778580448987425);
-//  kb_helper    = 2.15571608979748;
-//  kr_helper    = 1.31367396909461;
-//  kg_helper    = float2(-0.228448313084334, 0.613593807618545);
-//
-//  to_xyz       = float3x3(0.950327431033156, 0.000000000000000,  0.000101114344024341,
-//                          0.343163015452697, 0.734695029446046, -0.0778580448987425,
-//                          0.000000000000000, 0.000000000000000,  1.08890037079813);
-//
-//  to_lms       = float3x3(0.580810546875, 0.512451171875, -0.09326171875,
-//                          0.195068359375, 0.808349609375, -0.00341796875,
-//                          0.0322265625,   0.054931640625,  0.91259765625);
-//
-//  from_lms     = float3x3( 2.17845648544721,   -1.39580019302982,    0.217396782969079,
-//                          -0.525889627357037,   1.57372643877619,   -0.0478484931801823,
-//                          -0.0452731647735950, -0.0454368173474335,  1.09097633376501);
-//};
-//
-//colourspace return_struct(float test)
-//{
-//  colourspace csp_bt709;
-//  csp_bt709.can_ycbcr = true;
-//  return csp_bt709;
-//}
-//
 
 
 bool IsNAN(float Input)

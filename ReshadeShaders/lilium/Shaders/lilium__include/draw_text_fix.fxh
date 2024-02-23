@@ -72,7 +72,7 @@
 #include "lilium__DrawText_fix.fxh"
 
 float4 main_fragment( float4 position : POSITION,
-                      float2 txcoord  : TEXCOORD) : COLOR {
+                      float2 txcoord  : TEXCOORD0) : COLOR {
   float res = 0.0;
 
   int line0[9]  = { __D, __e, __m, __o, __Space, __T, __e, __x, __t };   //Demo Text
@@ -230,9 +230,9 @@ sampler Sampler_HDR_Text
     text    = tex2D(Sampler_HDR_Text, (frac(uv) + float2(id % 14.f, trunc(id / 14.f))) / \
               float2(_DRAWTEXT_GRID_X, _DRAWTEXT_GRID_Y)).x; \
   if(text > 0.f) \
-      output = text * bright; \
+    output = text * bright; \
   else \
-      output += text; \
+    output += text; \
 }
 
 float2 DrawTextShift(
